@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -100,5 +101,55 @@ func TestParseSubscriptionUserinfo(t *testing.T) {
 	}
 	if _, ok := parseSubscriptionUserinfo(""); ok {
 		t.Error("empty header must not parse")
+	}
+}
+
+func TestGroupOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.yaml")
+	yaml := "mixed-port: 7890\n" +
+		"proxy-groups:\n" +
+		"  - name: PROXY\n" +
+		"    type: select\n" +
+		"  - {name: JP Tokyo, type: select, proxies: [a, b]} # 注释\n" +
+		"  - name: \"AUTO\"\n" +
+		"    type: url-test\n" +
+		"rules:\n" +
+		"  - MATCH,PROXY\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := GroupOrder(path)
+	want := []string{"PROXY", "JP Tokyo", "AUTO"}
+	if len(got) != len(want) {
+		t.Fatalf("order = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %q, want %q", got, want)
+		}
+	}
+	if n := GroupOrder(filepath.Join(dir, "missing.yaml")); n != nil {
+		t.Errorf("missing file should yield nil, got %q", n)
+	}
+}
+
+func TestSortGroups(t *testing.T) {
+	mk := func(names ...string) []*GroupView {
+		out := []*GroupView{}
+		for _, n := range names {
+			out = append(out, &GroupView{Name: n})
+		}
+		return out
+	}
+	groups := mk("US", "Apple", "PROXY", "Zebra")
+	sortGroups(groups, []string{"PROXY", "Apple"})
+	var got []string
+	for _, g := range groups {
+		got = append(got, g.Name)
+	}
+	want := []string{"PROXY", "Apple", "US", "Zebra"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("sorted = %q, want %q", got, want)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -47,6 +48,52 @@ func DefaultConfig() Config {
 type ConfigError struct{ Path string }
 
 func (e *ConfigError) Error() string { return "config file not found: " + e.Path }
+
+// flowNameRE extracts the name from a flow-style group entry,
+// e.g. `- {name: 节点选择, type: select, …}`.
+var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*,`)
+
+// GroupOrder returns the proxy-groups names in the order the config file
+// declares them, so the UI can list groups like ClashX does instead of the
+// random order of the core's JSON map. Unknown or missing files yield nil.
+func GroupOrder(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	inBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if trimmed == line { // no indent: a new top-level key
+			inBlock = strings.HasPrefix(trimmed, "proxy-groups:")
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		var name string
+		switch rest, ok := strings.CutPrefix(trimmed, "- name:"); {
+		case ok:
+			name = rest
+		default:
+			m := flowNameRE.FindStringSubmatch(trimmed)
+			if m == nil {
+				continue
+			}
+			name = m[1]
+		}
+		// Drop a trailing YAML comment, then surrounding quotes.
+		if i := strings.Index(name, " #"); i >= 0 {
+			name = name[:i]
+		}
+		names = append(names, strings.Trim(strings.TrimSpace(name), `"'`))
+	}
+	return names
+}
 
 // providerBlock renders the proxy-providers block plus the policy groups
 // and rules. When localFile is non-empty the provider is a file provider

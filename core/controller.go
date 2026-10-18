@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -48,6 +49,11 @@ type Controller struct {
 	mgr    *Manager
 	client *Client
 	cfg    Config
+
+	// groupOrder is the proxy-groups order read from the YAML the running
+	// core loaded, so the UI lists groups like ClashX does (the API's JSON
+	// map has no order).
+	groupOrder []string
 
 	mu       sync.Mutex
 	state    State
@@ -110,10 +116,12 @@ func (c *Controller) Start(ctx context.Context) error {
 	if _, err := c.mgr.EnsureBinary(); err != nil {
 		return err
 	}
-	if _, err := c.mgr.Start(ctx, c.cfg, func() error {
+	if configPath, err := c.mgr.Start(ctx, c.cfg, func() error {
 		return c.client.Ping(context.Background())
 	}); err != nil {
 		return err
+	} else {
+		c.groupOrder = GroupOrder(configPath)
 	}
 	c.setState(func(s *State) {
 		s.Running = true
@@ -197,6 +205,7 @@ func (c *Controller) pollLoop(ctx context.Context) {
 			groups = append(groups, g)
 			sel[name] = p.Now
 		}
+		sortGroups(groups, c.groupOrder)
 		c.setState(func(s *State) {
 			s.Running = true
 			s.Mode = cfg.Mode
@@ -303,4 +312,29 @@ func (c *Controller) RefreshSubscription(ctx context.Context) (int, error) {
 // SetSubDownloading marks the state while a subscription download runs.
 func (c *Controller) SetSubDownloading(on bool) {
 	c.setState(func(s *State) { s.SubDownloading = on })
+}
+
+// sortGroups orders groups by the config file declaration (order), then
+// alphabetically, so repeated polls keep a stable, ClashX-like list.
+func sortGroups(groups []*GroupView, order []string) {
+	idx := make(map[string]int, len(order))
+	for i, name := range order {
+		if _, dup := idx[name]; !dup {
+			idx[name] = i
+		}
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		gi, oki := idx[groups[i].Name]
+		gj, okj := idx[groups[j].Name]
+		switch {
+		case oki && okj:
+			return gi < gj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return groups[i].Name < groups[j].Name
+		}
+	})
 }

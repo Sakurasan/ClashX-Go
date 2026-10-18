@@ -125,6 +125,7 @@ func (c *Client) SetMode(ctx context.Context, mode string) error {
 type Proxy struct {
 	Name    string          `json:"name"`
 	Type    string          `json:"type"`
+	Hidden  bool            `json:"hidden"`
 	Now     string          `json:"now"`
 	All     []string        `json:"all"`
 	History []DelayEntry    `json:"history"`
@@ -143,10 +144,13 @@ type Proxies struct {
 }
 
 // ProxyGroups returns the proxies whose type is a policy group (Selector,
-// URLTest, Fallback, LoadBalance).
+// URLTest, Fallback, LoadBalance), skipping hidden built-ins like GLOBAL.
 func (p *Proxies) ProxyGroups() map[string]*Proxy {
 	out := map[string]*Proxy{}
 	for name, pr := range p.Proxies {
+		if pr.Hidden {
+			continue
+		}
 		switch pr.Type {
 		case "Selector", "URLTest", "Fallback", "LoadBalance":
 			out[name] = pr
