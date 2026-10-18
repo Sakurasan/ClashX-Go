@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -27,6 +28,10 @@ type app struct {
 	win      *mygo.Window
 	tray     *mygo.Tray
 	quitting bool
+
+	// coreOp serialises start/stop/restart so menu clicks cannot stack up
+	// against a still-finishing operation.
+	coreOp sync.Mutex
 }
 
 func main() {
@@ -43,6 +48,11 @@ func main() {
 // ready wires the tray, the controller and the panel window.
 func (a *app) ready() {
 	dir := coreDir()
+	if !singleInstanceLock(filepath.Join(dir, "app.lock")) {
+		mygo.Dialog.Error("ClashX Go", "程序已在运行中，请勿启动第二个实例。")
+		mygo.App.Quit()
+		return
+	}
 	mgr, err := core.NewManager(dir)
 	if err != nil {
 		log.Fatal("core dir: ", err)
@@ -119,6 +129,13 @@ func (a *app) onState(s core.State) {
 }
 
 func (a *app) startCore() {
+	a.coreOp.Lock()
+	defer a.coreOp.Unlock()
+	if a.ctrl.Manager().Running() {
+		// A quick 停止→启动 or double click: the previous op already won
+		// the race, and Manager.Start would only error "already running".
+		return
+	}
 	ctx := context.Background()
 	// Re-read settings so a fresh Start (e.g. from the panel footer)
 	// uses the current endpoints.
@@ -130,18 +147,22 @@ func (a *app) startCore() {
 		a.ctrl.SetSubDownloading(true)
 	}
 	if err := a.ctrl.Start(ctx); err != nil {
-		log.Println("start core: ", err)
-		a.showToast("核心启动失败", err.Error())
+		a.reportError("核心启动失败", err.Error())
 	}
 	a.ctrl.SetSubDownloading(false)
 }
 
 func (a *app) stopCore() {
+	a.coreOp.Lock()
+	defer a.coreOp.Unlock()
 	a.ctrl.Stop()
 }
 
 // restartCore stops the old controller config and starts a new one.
 func (a *app) restartCore(cfg core.Config) error {
+	a.coreOp.Lock()
+	defer a.coreOp.Unlock()
+	a.ctrl.Stop()
 	a.ctrl = core.NewController(a.ctrl.Manager(), cfg)
 	a.ctrl.OnChange(a.onState)
 	return a.ctrl.Start(context.Background())

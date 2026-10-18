@@ -55,6 +55,11 @@ type Controller struct {
 	// map has no order).
 	groupOrder []string
 
+	// delays caches full group test results (group→member→ms): the poll
+	// loop rebuilds GroupViews and the API only reports history for each
+	// group's current member, so without this the other nodes go blank.
+	delays map[string]map[string]int
+
 	mu       sync.Mutex
 	state    State
 	onChange func(State)
@@ -158,6 +163,7 @@ func (c *Controller) beginLoops(ctx context.Context) {
 	c.done = make(chan struct{})
 	go c.pollLoop(c.ctx)
 	go c.trafficLoop(c.ctx)
+	go c.testLoop(c.ctx)
 	go func() {
 		<-c.ctx.Done()
 		close(c.done)
@@ -183,35 +189,29 @@ func (c *Controller) pollLoop(ctx context.Context) {
 			s.SubInfo = info
 		})
 	}
+	fails := 0
+	noteFailure := func() {
+		// The API can blip during a core reload; only a sustained failure
+		// means the process died behind our back (e.g. a second app
+		// instance's cleanup). Then the menu must show 启动核心 again.
+		fails++
+		if fails == 3 {
+			c.setState(func(s *State) { s.Running = false })
+		}
+	}
 	refresh := func() {
 		cfg, err := c.client.GetConfigs(ctx)
 		if err != nil {
+			noteFailure()
 			return
 		}
 		proxies, err := c.client.GetProxies(ctx)
 		if err != nil {
+			noteFailure()
 			return
 		}
-		groups := []*GroupView{}
-		sel := map[string]string{}
-		for name, p := range proxies.ProxyGroups() {
-			g := &GroupView{Name: name, Type: p.Type, Current: p.Now, Members: p.All, Delays: map[string]int{}}
-			// Seed the delay map from the probe history that mihomo keeps for
-			// the group's current member. A Delay of 0 means untested yet.
-			if len(p.History) > 0 {
-				g.Delays[p.Now] = int(p.History[len(p.History)-1].Delay)
-				g.TestedAt = p.History[len(p.History)-1].Time.Unix()
-			}
-			groups = append(groups, g)
-			sel[name] = p.Now
-		}
-		sortGroups(groups, c.groupOrder)
-		c.setState(func(s *State) {
-			s.Running = true
-			s.Mode = cfg.Mode
-			s.Selected = sel
-			s.Groups = groups
-		})
+		fails = 0
+		c.applyProxies(cfg.Mode, proxies)
 		refreshSub()
 	}
 	refresh()
@@ -250,6 +250,27 @@ func (c *Controller) SelectProxy(ctx context.Context, group, member string) erro
 			}
 		}
 	})
+	// ClashX shows a delay for the node you just picked: measure it right
+	// after the switch instead of waiting for the next full test round.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		d, err := c.client.TestProxyDelay(ctx, member)
+		if err != nil {
+			d = -1
+		}
+		c.setState(func(s *State) {
+			if c.delays[group] == nil {
+				c.delays[group] = map[string]int{}
+			}
+			c.delays[group][member] = d
+			for _, g := range s.Groups {
+				if g.Name == group {
+					g.Delays[member] = d
+				}
+			}
+		})
+	}()
 	return nil
 }
 
@@ -262,13 +283,26 @@ func (c *Controller) SetMode(ctx context.Context, mode string) error {
 	return nil
 }
 
-// TestGroup runs a delay test on a group and stores the results.
+// TestGroup runs a delay test on every member of a group and stores the
+// results (name→ms, -1 for unreachable).
 func (c *Controller) TestGroup(ctx context.Context, group string) error {
-	delays, err := c.client.TestDelay(ctx, group)
-	if err != nil {
-		return err
+	c.mu.Lock()
+	var members []string
+	for _, g := range c.state.Groups {
+		if g.Name == group {
+			members = append([]string(nil), g.Members...)
+		}
 	}
+	c.mu.Unlock()
+	if len(members) == 0 {
+		return nil
+	}
+	delays := c.client.TestGroupDelay(ctx, members)
 	c.setState(func(s *State) {
+		if c.delays == nil {
+			c.delays = map[string]map[string]int{}
+		}
+		c.delays[group] = delays
 		for _, g := range s.Groups {
 			if g.Name == group {
 				g.Delays = delays
@@ -277,6 +311,44 @@ func (c *Controller) TestGroup(ctx context.Context, group string) error {
 		}
 	})
 	return nil
+}
+
+// testDelayRefresh is how often the running core is re-tested so the menu
+// carries fresh delays without the user pressing 延迟测速.
+const testDelayRefresh = 5 * time.Minute
+
+// testLoop waits for the first group list, tests every group once, then
+// refreshes on a timer. Groups are tested one after another so a large
+// subscription does not flood the core with probes.
+func (c *Controller) testLoop(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if len(c.State().Groups) > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+	for {
+		for _, g := range c.State().Groups {
+			if ctx.Err() != nil {
+				return
+			}
+			cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			_ = c.TestGroup(cctx, g.Name)
+			cancel()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(testDelayRefresh):
+		}
+	}
 }
 
 // CloseConnections closes all active connections.
@@ -312,6 +384,39 @@ func (c *Controller) RefreshSubscription(ctx context.Context) (int, error) {
 // SetSubDownloading marks the state while a subscription download runs.
 func (c *Controller) SetSubDownloading(on bool) {
 	c.setState(func(s *State) { s.SubDownloading = on })
+}
+
+// applyProxies turns a /proxies snapshot into state: groups are ordered by
+// the config file, seeded from mihomo's history for each current member and
+// topped up from the delay cache so tested nodes survive between polls.
+func (c *Controller) applyProxies(mode string, proxies *Proxies) {
+	groups := []*GroupView{}
+	sel := map[string]string{}
+	for name, p := range proxies.ProxyGroups() {
+		g := &GroupView{Name: name, Type: p.Type, Current: p.Now, Members: p.All, Delays: map[string]int{}}
+		// Seed the delay map from the probe history that mihomo keeps for
+		// the group's current member. A Delay of 0 means untested yet.
+		if len(p.History) > 0 {
+			g.Delays[p.Now] = int(p.History[len(p.History)-1].Delay)
+			g.TestedAt = p.History[len(p.History)-1].Time.Unix()
+		}
+		groups = append(groups, g)
+		sel[name] = p.Now
+	}
+	sortGroups(groups, c.groupOrder)
+	c.setState(func(s *State) {
+		for _, g := range groups {
+			for n, d := range c.delays[g.Name] {
+				if _, ok := g.Delays[n]; !ok {
+					g.Delays[n] = d
+				}
+			}
+		}
+		s.Running = true
+		s.Mode = mode
+		s.Selected = sel
+		s.Groups = groups
+	})
 }
 
 // sortGroups orders groups by the config file declaration (order), then

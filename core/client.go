@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -148,7 +149,7 @@ type Proxies struct {
 func (p *Proxies) ProxyGroups() map[string]*Proxy {
 	out := map[string]*Proxy{}
 	for name, pr := range p.Proxies {
-		if pr.Hidden {
+		if pr.Hidden || name == "GLOBAL" { // ClashX hides the built-in catch-all
 			continue
 		}
 		switch pr.Type {
@@ -206,22 +207,61 @@ func (c *Client) SelectProxy(ctx context.Context, group, member string) error {
 	return nil
 }
 
-// TestDelay runs a group latency test and returns the map name→ms.
-func (c *Client) TestDelay(ctx context.Context, group string) (map[string]int, error) {
-	path := "/group/" + url.PathEscape(group) + "/delay?timeout=5000&url=http://www.gstatic.com/generate_204"
+// TestProxyDelay measures one proxy's latency in ms. mihomo answers 503
+// with {"message":"timeout"} for unreachable nodes, reported as -1.
+func (c *Client) TestProxyDelay(ctx context.Context, name string) (int, error) {
+	path := "/proxies/" + url.PathEscape(name) + "/delay?timeout=5000&url=http://www.gstatic.com/generate_204"
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, err
+		return -1, err
 	}
+	defer io.Copy(io.Discard, resp.Body) // drain so the connection is reusable
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("delay test: HTTP %d", resp.StatusCode)
+		return -1, fmt.Errorf("delay test %s: HTTP %d", name, resp.StatusCode)
 	}
-	out := map[string]int{}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+	var v struct {
+		Delay int `json:"delay"`
 	}
-	return out, nil
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return -1, err
+	}
+	return v.Delay, nil
+}
+
+// groupTestConcurrency is how many nodes one group test probes at once.
+const groupTestConcurrency = 16
+
+// TestGroupDelay tests every member of a group concurrently and returns
+// name→ms (-1 for unreachable). mihomo's legacy /group/{name}/delay only
+// answers for the group's current selection, so each node is tested via
+// its own endpoint, like ClashX does.
+func (c *Client) TestGroupDelay(ctx context.Context, members []string) map[string]int {
+	out := make(map[string]int, len(members))
+	var mu sync.Mutex
+	sem := make(chan struct{}, groupTestConcurrency)
+	var wg sync.WaitGroup
+	for _, m := range members {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			d, err := c.TestProxyDelay(ctx, name)
+			if err != nil {
+				d = -1
+			}
+			mu.Lock()
+			out[name] = d
+			mu.Unlock()
+		}(m)
+	}
+	wg.Wait()
+	return out
 }
 
 // Traffic is one sample of the /traffic stream.

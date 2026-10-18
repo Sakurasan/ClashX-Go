@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -52,6 +53,51 @@ func (e *ConfigError) Error() string { return "config file not found: " + e.Path
 // flowNameRE extracts the name from a flow-style group entry,
 // e.g. `- {name: 节点选择, type: select, …}`.
 var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*,`)
+
+// runningOverrideKeys are top-level keys the app owns: the settings panel
+// and menu toggles win over whatever the user's profile declares.
+var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "tun"}
+
+// writeRunningConfig copies a user profile to dest, stripping its
+// app-managed keys (including whole mapping blocks like tun:) and
+// prepending ours, so the 端口设置/局域网/Tun toggles take effect exactly
+// like ClashX's port settings override.
+func writeRunningConfig(src, dest string, cfg Config) (string, error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "mixed-port: %d\n", cfg.MixedPort)
+	fmt.Fprintf(&b, "allow-lan: %t\n", cfg.AllowLAN)
+	if cfg.TUN {
+		b.WriteString("tun:\n  enable: true\n  stack: system\n" +
+			"  strict-route: false\n  dns-hijack:\n    - any:53\n")
+	}
+	skipBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		indented := trimmed != "" && (line[0] == ' ' || line[0] == '\t')
+		if skipBlock {
+			if indented {
+				continue
+			}
+			skipBlock = false
+		}
+		if !indented && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if key, _, ok := strings.Cut(trimmed, ":"); ok && slices.Contains(runningOverrideKeys, strings.TrimSpace(key)) {
+				skipBlock = strings.HasSuffix(trimmed, ":") // mapping key whose indented block follows
+				continue
+			}
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(dest, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
 
 // GroupOrder returns the proxy-groups names in the order the config file
 // declares them, so the UI can list groups like ClashX does instead of the
@@ -164,7 +210,7 @@ func (c Config) WriteYAML(dir string) (string, error) {
 	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
 		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
 	if c.TUN {
-		b.WriteString("tun:\n  enable: true\n  stack: system\n  device: utun-clash\n" +
+		b.WriteString("tun:\n  enable: true\n  stack: system\n" +
 			"  strict-route: false\n  dns-hijack:\n    - any:53\n")
 	}
 

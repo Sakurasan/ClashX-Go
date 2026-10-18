@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -91,7 +92,7 @@ func (m *trayMenu) build(s core.State) {
 		Type:        mygo.MenuItemCheckbox,
 		Checked:     st.tun,
 		Accelerator: "Cmd+E",
-		ToolTip:     "打开 utun 设备需要管理员权限（用 sudo 启动本应用）",
+		ToolTip:     "开启时会请求一次管理员授权（创建 utun 设备）",
 	}
 	m.tunItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setTUNToggle(it) }
 	copyCmd := &mygo.MenuItem{Label: "复制终端代理命令", Accelerator: "Cmd+C", Click: func(*mygo.MenuItem, *mygo.Window) { a.copyProxyCommand() }}
@@ -243,13 +244,20 @@ func (m *trayMenu) setSpeedTitle(s core.State) {
 	}
 }
 
+// reportError surfaces a menu action failure as a real dialog: the panel
+// window is usually hidden, so a queued toast would go unseen.
+func (a *app) reportError(title, msg string) {
+	log.Printf("%s: %s", title, msg)
+	mygo.Dialog.Error(title, msg)
+}
+
 // --- menu actions (main thread) ---
 
 func (a *app) setMode(mode string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.ctrl.SetMode(ctx, mode); err != nil {
-		a.showToast("切换模式失败", err.Error())
+		a.reportError("切换模式失败", err.Error())
 	}
 }
 
@@ -263,12 +271,17 @@ func (a *app) toggleCore() {
 
 func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 	on := it.IsChecked()
+	if on && !a.ctrl.State().Running {
+		it.SetChecked(false)
+		a.reportError("系统代理", "核心未运行，开启后浏览器会断网；请先启动核心。")
+		return
+	}
 	go func() {
 		if err := setSystemProxy(on, a.mixedPort()); err != nil {
 			a.settings.systemProxy = !on
 			saveSettings(coreDir(), a.settings)
 			a.menu.sysProxy.SetChecked(!on)
-			a.showToast("系统代理", err.Error())
+			a.reportError("系统代理", err.Error())
 			return
 		}
 		a.settings.systemProxy = on
@@ -280,7 +293,7 @@ func (a *app) setLoginToggle(it *mygo.MenuItem) {
 	on := it.IsChecked()
 	if err := mygo.App.SetOpenAtLogin(on); err != nil {
 		it.SetChecked(!on)
-		a.showToast("开机启动", "无法修改登录项："+err.Error())
+		a.reportError("开机启动", "无法修改登录项："+err.Error())
 		return
 	}
 	a.settings.startAtLogin = mygo.App.OpenAtLogin()
@@ -292,7 +305,7 @@ func (a *app) setLANToggle(it *mygo.MenuItem) {
 	saveSettings(coreDir(), a.settings)
 	go func() {
 		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.showToast("局域网", "重启核心失败："+err.Error())
+			a.reportError("局域网", "重启核心失败："+err.Error())
 		}
 	}()
 }
@@ -312,11 +325,8 @@ func (a *app) setTUNToggle(it *mygo.MenuItem) {
 		a.settings.tun = !on
 		saveSettings(coreDir(), a.settings)
 		a.menu.tunItem.SetChecked(!on)
-		msg := err.Error()
-		if on && strings.Contains(strings.ToLower(msg), "permitted") {
-			msg += "\nTUN 需要管理员权限：用 sudo 启动 ClashX Go 后再试。"
-		}
-		a.showToast("Tun 模式", msg)
+		// A failed elevation must be seen: the panel toast window is hidden.
+		a.reportError("Tun 模式", err.Error())
 	}()
 }
 
@@ -324,7 +334,7 @@ func (a *app) copyProxyCommand() {
 	port := a.mixedPort()
 	cmd := fmt.Sprintf("export http_proxy=http://127.0.0.1:%d\nexport https_proxy=http://127.0.0.1:%d\nexport all_proxy=socks5://127.0.0.1:%d", port, port, port)
 	if err := mygo.Clipboard.Write(transfer.TextData(cmd)); err != nil {
-		a.showToast("复制失败", err.Error())
+		a.reportError("复制失败", err.Error())
 	}
 }
 
@@ -332,7 +342,7 @@ func (a *app) testGroup(group string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := a.ctrl.TestGroup(ctx, group); err != nil {
-		a.showToast("延迟测速", fmt.Sprintf("%s: %v", group, err))
+		a.reportError("延迟测速", fmt.Sprintf("%s: %v", group, err))
 	}
 }
 
@@ -346,20 +356,20 @@ func (a *app) selectProxy(group, member string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.ctrl.SelectProxy(ctx, group, member); err != nil {
-		a.showToast("切换节点失败", err.Error())
+		a.reportError("切换节点失败", err.Error())
 	}
 }
 
 func (a *app) updateSubscription() {
 	if a.settings.subscriptionURL == "" {
-		a.showToast("未配置订阅", "请先在偏好设置里填写订阅地址。")
+		a.reportError("未配置订阅", "请先在偏好设置里填写订阅地址。")
 		a.showPanel(tabSettings)
 		return
 	}
 	go func() {
 		n, err := a.ctrl.RefreshSubscription(context.Background())
 		if err != nil {
-			a.showToast("订阅更新失败", err.Error())
+			a.reportError("订阅更新失败", err.Error())
 			return
 		}
 		a.showToast("订阅已更新", fmt.Sprintf("%d 个节点已重载。", n))
@@ -378,7 +388,7 @@ func (a *app) chooseLocalConfig() {
 	saveSettings(coreDir(), a.settings)
 	go func() {
 		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.showToast("加载本地配置失败", err.Error())
+			a.reportError("加载本地配置失败", err.Error())
 		}
 	}()
 }
@@ -386,7 +396,7 @@ func (a *app) chooseLocalConfig() {
 func (a *app) reloadCore() {
 	go func() {
 		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.showToast("重载失败", err.Error())
+			a.reportError("重载失败", err.Error())
 		}
 	}()
 }
@@ -417,15 +427,20 @@ func groupLabel(name, current string) string {
 	return name + "  (" + current + ")"
 }
 
+// memberLabel renders a node with a ClashX-style coloured delay badge.
+// Native menus cannot draw the coloured pill, so a coloured circle stands
+// in: green ≤300ms, orange slower, red for failures.
 func memberLabel(name string, delays map[string]int) string {
 	d, ok := delays[name]
 	switch {
 	case !ok || d == 0:
 		return name
 	case d < 0:
-		return name + "  ·  超时"
+		return name + "  🔴 失败"
+	case d <= 300:
+		return fmt.Sprintf("%s  🟢 %d ms", name, d)
 	default:
-		return fmt.Sprintf("%s  ·  %d ms", name, d)
+		return fmt.Sprintf("%s  🟠 %d ms", name, d)
 	}
 }
 

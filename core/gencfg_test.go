@@ -153,3 +153,43 @@ func TestSortGroups(t *testing.T) {
 		t.Errorf("sorted = %q, want %q", got, want)
 	}
 }
+
+// TestWriteRunningConfig checks that app-managed keys in a user profile are
+// replaced (including the whole tun: block) while everything else survives.
+func TestWriteRunningConfig(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "profile.yaml")
+	dest := filepath.Join(dir, "running.yaml")
+	profile := "Gmixed-port: 7890\n" + // corrupted key from a bad download: kept, ignored
+		"mixed-port: 1111\n" +
+		"allow-lan: true\n" +
+		"tun:\n  enable: true\n  stack: mixed\n" +
+		"mode: Rule\n" +
+		"proxy-groups:\n  - name: A\n    type: select\n"
+	if err := os.WriteFile(src, []byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.MixedPort = 7890
+	if _, err := writeRunningConfig(src, dest, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, want := range []string{"mixed-port: 7890", "allow-lan: false", "Gmixed-port", "name: A", "mode: Rule"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
+		}
+	}
+	for _, bad := range []string{"mixed-port: 1111", "allow-lan: true", "tun:", "stack: mixed"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("should not contain %q in:\n%s", bad, s)
+		}
+	}
+	if n := len(GroupOrder(dest)); n != 1 {
+		t.Errorf("group order lost: %d", n)
+	}
+}
