@@ -122,6 +122,21 @@ func (c *Client) SetMode(ctx context.Context, mode string) error {
 	return nil
 }
 
+// SetTUN toggles the TUN interface at runtime (mihomo hot-patches it),
+// avoiding a core restart.
+func (c *Client) SetTUN(ctx context.Context, enable bool) error {
+	body := strings.NewReader(fmt.Sprintf(`{"tun":{"enable":%t}}`, enable))
+	resp, err := c.do(ctx, http.MethodPatch, "/configs", body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("PATCH /configs tun: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // Proxy describes one proxy or policy group entry from /proxies.
 type Proxy struct {
 	Name    string          `json:"name"`

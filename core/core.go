@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -36,12 +37,12 @@ func binaryName() string {
 type Manager struct {
 	dir string // working directory (config.yaml + downloaded binary live here)
 
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	exitCh   chan error // receives cmd.Wait() once the process is up
-	elevated bool       // core runs as root via the TUN watcher script
-	procPID  int
-	running  bool
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	exitCh     chan error // receives cmd.Wait() once the process is up
+	procPID    int
+	running    bool
+	privileged bool // core runs from the setuid copy (TUN hot-switchable)
 }
 
 // NewManager returns a Manager rooted at dir, creating it if needed.
@@ -203,8 +204,10 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	m.killStale()
 	// The controller port is ours to bind (we pass -ext-ctl). If another
 	// Clash core already owns it, mihomo would start half-dead and our
-	// ping would answer from the foreign core: fail early instead.
-	if cfg.ControllerPort > 0 && !portAvailable(cfg.ControllerPort) {
+	// ping would answer from the foreign core: fail early instead. A core
+	// we just stopped drains its connections before exiting, so allow a
+	// generous window for the port to come free.
+	if cfg.ControllerPort > 0 && !waitPortFree(cfg.ControllerPort, 12*time.Second) {
 		m.mu.Unlock()
 		return "", fmt.Errorf("端口 %d 已被占用（可能另有 Clash 核心在运行），请在偏好设置里换一个控制器端口", cfg.ControllerPort)
 	}
@@ -247,37 +250,42 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	if fi, err := os.Stat(logPath); err == nil {
 		logOffset = fi.Size()
 	}
-	elevated := cfg.TUN && runtime.GOOS == "darwin" && os.Geteuid() != 0
-	if elevated {
-		// TUN needs root to open a utun device: authorise once via the
-		// system dialog and let a detached watcher run the core as root.
-		// Later stops go through the stop flag without prompting again.
-		pid, err := m.startElevated(bin, args)
-		if err != nil {
-			m.mu.Unlock()
-			return "", err
+	privileged := false
+	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+		switch {
+		case cfg.TUN:
+			// TUN needs root to open a utun device. Run a one-time
+			// installed root-owned setuid copy of the core; afterwards
+			// starting TUN asks for no password.
+			priv, err := m.privilegedCore(bin)
+			if err != nil {
+				m.mu.Unlock()
+				return "", err
+			}
+			bin, privileged = priv, true
+		case sameBinary(bin, privilegedCorePath()):
+			// The component is already authorised: keep using it even with
+			// TUN off so later toggles stay a hot API patch, never a restart.
+			bin, privileged = privilegedCorePath(), true
 		}
-		procPID = pid
-		go m.watchElevated(pid, exited)
-	} else {
-		cmd = exec.Command(bin, args...)
-		cmd.Dir = m.dir
-		logf, err := os.OpenFile(filepath.Join(m.dir, "core.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			m.mu.Unlock()
-			return "", err
-		}
-		cmd.Stdout = logf
-		cmd.Stderr = logf
-		if err := cmd.Start(); err != nil {
-			m.mu.Unlock()
-			return "", fmt.Errorf("start mihomo: %w", err)
-		}
-		procPID = cmd.Process.Pid
-		go func() { exited <- cmd.Wait() }()
 	}
+	cmd = exec.Command(bin, args...)
+	cmd.Dir = m.dir
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		m.mu.Unlock()
+		return "", err
+	}
+	cmd.Stdout = logf
+	cmd.Stderr = logf
+	if err := cmd.Start(); err != nil {
+		m.mu.Unlock()
+		return "", fmt.Errorf("start mihomo: %w", err)
+	}
+	procPID = cmd.Process.Pid
+	go func() { exited <- cmd.Wait() }()
 	m.cmd = cmd
-	m.elevated = elevated
+	m.privileged = privileged
 	m.procPID = procPID
 	m.running = true
 	m.exitCh = exited
@@ -314,89 +322,66 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	return "", fmt.Errorf("core did not answer on the controller within 15s")
 }
 
-// stopFlag asks the root watcher to terminate the core without another
-// administrator prompt.
+// stopFlag asks a legacy watcher (pre-setuid installs) to terminate an
+// orphaned root core without another administrator prompt.
 func (m *Manager) stopFlag() string { return filepath.Join(m.dir, "core.stop") }
 
-// startElevated launches the core as root through one administrator
-// authorisation (osascript). The detached watcher keeps the process,
-// records its pid and obeys the stop flag. Returns the core pid.
-func (m *Manager) startElevated(bin string, args []string) (int, error) {
-	quoted := make([]string, len(args))
-	for i, a := range args {
-		quoted[i] = strconv.Quote(a)
+// privilegedDir is where the root-owned setuid core copy lives.
+const privilegedDir = "/Library/Application Support/clashx-go"
+
+func privilegedCorePath() string { return filepath.Join(privilegedDir, binaryName()) }
+
+// privilegedCore installs or refreshes the setuid copy of the core used for
+// TUN. The administrator prompt appears only the first time, or after the
+// bundled core changed (hash mismatch / missing setuid bit).
+func (m *Manager) privilegedCore(bin string) (string, error) {
+	dest := privilegedCorePath()
+	if sameBinary(bin, dest) {
+		return dest, nil
 	}
-	logPath := strconv.Quote(filepath.Join(m.dir, "core.log"))
-	pidPath := strconv.Quote(m.pidPath())
-	stopPath := strconv.Quote(m.stopFlag())
-	inner := fmt.Sprintf(
-		"%s %s >> %s 2>&1 & CPID=$!; echo $CPID > %s; "+
-			"while kill -0 $CPID 2>/dev/null; do "+
-			"if [ -f %s ]; then kill $CPID; rm -f %s; break; fi; "+
-			"sleep 0.5; done",
-		strconv.Quote(bin), strings.Join(quoted, " "), logPath, pidPath, stopPath, stopPath)
-	// The watcher body lives in its own file so the launcher below needs no
-	// nested quoting. Single quotes in paths would break the sh -c layers.
-	if strings.ContainsAny(inner, "'\n") {
-		return 0, fmt.Errorf("配置路径含非法字符，无法授权启动 TUN")
-	}
-	watchPath := filepath.Join(m.dir, "tun_watch.sh")
-	watch := "#!/bin/sh\n" + inner + "\n"
-	if err := os.WriteFile(watchPath, []byte(watch), 0700); err != nil {
-		return 0, err
-	}
-	// `do shell script` cleans up leftover children when it returns, which
-	// killed the detached watcher. Hand the process to the user's launchd
-	// session via `launchctl asuser` (still root, but outside the
-	// authorized command's process group).
-	script := "#!/bin/sh\nlaunchctl asuser " + strconv.Itoa(os.Getuid()) +
-		" /bin/sh -c 'nohup /bin/sh " + strconv.Quote(watchPath) + " >/dev/null 2>&1 &'\nexit 0\n"
-	scriptPath := filepath.Join(m.dir, "tun.sh")
-	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
-		return 0, err
-	}
-	_ = os.Remove(m.stopFlag())
-	// Single quotes keep the shell happy with spaces in the path, and keep
-	// the AppleScript string literal free of embedded double quotes.
-	if strings.ContainsAny(scriptPath, "'\n") {
-		return 0, fmt.Errorf("配置目录名含非法字符，无法授权启动 TUN")
+	inner := fmt.Sprintf("mkdir -p %s && cp %s %s && chown -R root:wheel %s && chmod 4755 %s",
+		strconv.Quote(privilegedDir), strconv.Quote(bin), strconv.Quote(dest),
+		strconv.Quote(privilegedDir), strconv.Quote(dest))
+	scriptPath := filepath.Join(m.dir, "tun_install.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\n"+inner+"\n"), 0o700); err != nil {
+		return "", err
 	}
 	out, err := exec.Command("osascript", "-e",
-		fmt.Sprintf(`do shell script "/bin/sh '%s' " with administrator privileges with prompt "ClashX Go 需要管理员权限开启 TUN 模式（创建 utun 设备）。授权后关闭 TUN 不再重复询问。"`,
+		fmt.Sprintf(`do shell script "/bin/sh '%s' " with administrator privileges with prompt "ClashX Go 正在安装 TUN 提权组件（仅需一次，之后开启 TUN 不再询问密码）。"`,
 			scriptPath)).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if strings.Contains(msg, "-128") {
-			return 0, fmt.Errorf("已取消管理员授权")
+			return "", fmt.Errorf("已取消管理员授权")
 		}
-		return 0, fmt.Errorf("管理员授权失败: %s", msg)
+		return "", fmt.Errorf("安装 TUN 提权组件失败: %s", msg)
 	}
-	for range 40 {
-		if data, err := os.ReadFile(m.pidPath()); err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-				return pid, nil
-			}
-		}
-		time.Sleep(250 * time.Millisecond)
+	if !sameBinary(bin, dest) {
+		return "", fmt.Errorf("TUN 提权组件安装校验失败")
 	}
-	return 0, fmt.Errorf("核心未能以管理员权限启动")
+	return dest, nil
 }
 
-// watchElevated reports when the root-owned core process disappears.
-func (m *Manager) watchElevated(pid int, exited chan<- error) {
-	proc, err := os.FindProcess(pid)
+// sameBinary reports whether two files have identical bytes.
+func sameBinary(a, b string) bool {
+	fa, err := os.Open(a)
 	if err != nil {
-		exited <- err
-		return
+		return false
 	}
-	for {
-		if err := proc.Signal(syscall.Signal(0)); err != nil && !errors.Is(err, syscall.EPERM) {
-			// EPERM means alive but root-owned; anything else is gone.
-			exited <- fmt.Errorf("core exited")
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
+	defer fa.Close()
+	fb, err := os.Open(b)
+	if err != nil {
+		return false
 	}
+	defer fb.Close()
+	sa, sb := sha256.New(), sha256.New()
+	if _, err := io.Copy(sa, fa); err != nil {
+		return false
+	}
+	if _, err := io.Copy(sb, fb); err != nil {
+		return false
+	}
+	return bytes.Equal(sa.Sum(nil), sb.Sum(nil))
 }
 
 // checkTUNReady waits briefly after the core answers and rejects a start
@@ -449,28 +434,29 @@ func (m *Manager) Stop() {
 	}
 	// Send SIGTERM first, then SIGKILL after a grace period. The startup
 	// watcher goroutine delivers the real exit to exitCh; Stop must not
-	// call cmd.Wait itself. An elevated core cannot be signalled from here
-	// — the root watcher obeys the stop flag instead, without a second
-	// administrator prompt.
+	// call cmd.Wait itself. A setuid core keeps the user's real uid, so
+	// signalling it needs no privilege.
 	exit := m.exitCh
-	if m.elevated {
-		_ = os.WriteFile(m.stopFlag(), nil, 0o644)
-	} else if m.cmd != nil && m.cmd.Process != nil {
+	if m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Signal(os.Interrupt)
 	}
 	if exit != nil {
 		select {
 		case <-exit:
-		case <-time.After(5 * time.Second):
+		case <-time.After(3 * time.Second):
+			// Graceful drain can take minutes with busy keep-alives; a
+			// toggle restart should not wait for it. SIGKILL is reaped by
+			// the Wait goroutine, and Start's port wait absorbs the socket
+			// teardown.
 			if m.cmd != nil && m.cmd.Process != nil {
 				_ = m.cmd.Process.Kill()
-				<-exit
 			}
+			<-exit
 		}
 	}
 	m.running = false
 	m.cmd = nil
-	m.elevated = false
+	m.privileged = false
 	m.exitCh = nil
 	os.Remove(m.pidPath())
 }
@@ -489,6 +475,20 @@ func portAvailable(port int) bool {
 	return true
 }
 
+// waitPortFree polls portAvailable until it succeeds or timeout passes.
+func waitPortFree(port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if portAvailable(port) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // killStale terminates a core left over from a previous run.
 func (m *Manager) killStale() {
 	data, err := os.ReadFile(m.pidPath())
@@ -501,7 +501,22 @@ func (m *Manager) killStale() {
 		return
 	}
 	proc, err := os.FindProcess(pid)
-	if err != nil || proc.Signal(syscall.Signal(0)) != nil {
+	if err != nil {
+		return
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if !errors.Is(err, syscall.EPERM) {
+			return // already gone
+		}
+		// Root-owned leftover from an elevated TUN run: signal its watcher
+		// through the stop flag instead of killing directly.
+		_ = os.WriteFile(m.stopFlag(), nil, 0o644)
+		for range 20 {
+			time.Sleep(250 * time.Millisecond)
+			if proc.Signal(syscall.Signal(0)) != nil {
+				return
+			}
+		}
 		return
 	}
 	_ = proc.Signal(os.Interrupt)
@@ -512,6 +527,29 @@ func (m *Manager) killStale() {
 		}
 	}
 	_ = proc.Kill()
+}
+
+// Privileged reports whether the running core is the setuid copy, i.e.
+// whether TUN can be toggled at runtime without a restart.
+func (m *Manager) Privileged() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.privileged && m.running
+}
+
+// LogSize returns the current size of core.log, for scanning only new lines.
+func (m *Manager) LogSize() int64 {
+	fi, err := os.Stat(filepath.Join(m.dir, "core.log"))
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// TUNErrorAfter reports a TUN failure logged after offset, waiting briefly
+// for mihomo to notice it cannot open the device.
+func (m *Manager) TUNErrorAfter(offset int64) error {
+	return checkTUNReady(filepath.Join(m.dir, "core.log"), offset)
 }
 
 // Running reports whether the process is currently up.
@@ -540,7 +578,7 @@ const SubscriptionMaxAge = time.Hour
 // non-fatal: the config then falls back to an http provider that mihomo
 // fetches itself.
 func (m *Manager) ensureSubscription(ctx context.Context, cfg Config) error {
-	p := m.SubscriptionPath()
+	p := m.subscriptionPath(cfg.subFile())
 	if fi, err := os.Stat(p); err == nil && time.Since(fi.ModTime()) < SubscriptionMaxAge {
 		return nil
 	}
@@ -550,7 +588,7 @@ func (m *Manager) ensureSubscription(ctx context.Context, cfg Config) error {
 	if m.Running() {
 		proxy = fmt.Sprintf("127.0.0.1:%d", cfg.MixedPort)
 	}
-	n, err := m.DownloadSubscription(ctx, cfg.SubscriptionURL, proxy)
+	n, _, err := m.DownloadSubscription(ctx, cfg.subFile(), cfg.SubscriptionURL, proxy)
 	if err != nil {
 		// Log for diagnosis; keep the old copy.
 		fmt.Fprintf(os.Stderr, "subscription download failed: %v\n", err)
@@ -562,13 +600,14 @@ func (m *Manager) ensureSubscription(ctx context.Context, cfg Config) error {
 
 // RefreshSubscription forces a re-download regardless of the stored copy's
 // age, routing through the running core's mixed port when it is up so the
-// fetch itself is proxied. It returns the new proxy count.
-func (m *Manager) RefreshSubscription(ctx context.Context, cfg Config) (int, error) {
+// fetch itself is proxied. It returns the new proxy count and the provider's
+// suggested profile title.
+func (m *Manager) RefreshSubscription(ctx context.Context, cfg Config) (int, string, error) {
 	proxy := ""
 	if m.Running() {
 		proxy = fmt.Sprintf("127.0.0.1:%d", cfg.MixedPort)
 	}
-	return m.DownloadSubscription(ctx, cfg.SubscriptionURL, proxy)
+	return m.DownloadSubscription(ctx, cfg.subFile(), cfg.SubscriptionURL, proxy)
 }
 
 // LogPath returns where the core writes its stdout/stderr.

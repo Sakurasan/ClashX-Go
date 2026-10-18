@@ -17,10 +17,10 @@ import (
 	"time"
 )
 
-// SubscriptionFile is the file name of the downloaded subscription inside
-// the core working directory. When it exists, the generated config uses a
-// file provider pointing at it, so mihomo never has to reach the
-// subscription host itself.
+// SubscriptionFile is the default file name of a downloaded subscription
+// inside the core working directory. When it exists, the generated config
+// uses a file provider pointing at it, so mihomo never has to reach the
+// subscription host itself. Managed profiles each keep their own copy.
 const SubscriptionFile = "sub.yaml"
 
 // ErrNotClashYAML reports that a downloaded subscription is not a Clash
@@ -28,15 +28,18 @@ const SubscriptionFile = "sub.yaml"
 // provider cannot load it and the config falls back to an http provider.
 var ErrNotClashYAML = fmt.Errorf("subscription is not a Clash YAML document")
 
-// SubscriptionPath returns where the downloaded subscription is stored.
-func (m *Manager) SubscriptionPath() string {
-	return filepath.Join(m.dir, SubscriptionFile)
+// subscriptionPath returns the full path of a subscription file name.
+func (m *Manager) subscriptionPath(file string) string {
+	if file == "" {
+		file = SubscriptionFile
+	}
+	return filepath.Join(m.dir, file)
 }
 
 // SubscriptionProxyCount returns how many proxies the stored subscription
 // holds, or 0 when there is none.
-func (m *Manager) SubscriptionProxyCount() int {
-	data, err := os.ReadFile(m.SubscriptionPath())
+func (m *Manager) SubscriptionProxyCount(file string) int {
+	data, err := os.ReadFile(m.subscriptionPath(file))
 	if err != nil {
 		return 0
 	}
@@ -45,8 +48,8 @@ func (m *Manager) SubscriptionProxyCount() int {
 
 // SubscriptionUpdatedAt returns the modification time of the stored
 // subscription, or the zero time.
-func (m *Manager) SubscriptionUpdatedAt() time.Time {
-	fi, err := os.Stat(m.SubscriptionPath())
+func (m *Manager) SubscriptionUpdatedAt(file string) time.Time {
+	fi, err := os.Stat(m.subscriptionPath(file))
 	if err != nil {
 		return time.Time{}
 	}
@@ -56,12 +59,28 @@ func (m *Manager) SubscriptionUpdatedAt() time.Time {
 // SubscriptionStale reports whether the stored subscription is missing or
 // older than maxAge, i.e. whether a Start will have to download it before
 // the core can boot.
-func (m *Manager) SubscriptionStale(maxAge time.Duration) bool {
-	fi, err := os.Stat(m.SubscriptionPath())
+func (m *Manager) SubscriptionStale(file string, maxAge time.Duration) bool {
+	fi, err := os.Stat(m.subscriptionPath(file))
 	if err != nil || fi.Size() == 0 {
 		return true
 	}
 	return time.Since(fi.ModTime()) >= maxAge
+}
+
+// RenameSubscriptionFile moves a downloaded subscription (and its quota
+// sidecar) to a new file name.
+func (m *Manager) RenameSubscriptionFile(from, to string) error {
+	if err := os.Rename(m.subscriptionPath(from), m.subscriptionPath(to)); err != nil {
+		return err
+	}
+	_ = os.Rename(m.subscriptionInfoPath(from), m.subscriptionInfoPath(to))
+	return nil
+}
+
+// RemoveSubscriptionFiles deletes a subscription's stored files.
+func (m *Manager) RemoveSubscriptionFiles(file string) {
+	_ = os.Remove(m.subscriptionPath(file))
+	_ = os.Remove(m.subscriptionInfoPath(file))
 }
 
 // SubscriptionInfo is the quota metadata a provider returns in the
@@ -73,14 +92,14 @@ type SubscriptionInfo struct {
 	Expire   time.Time `json:"expire"`
 }
 
-func (m *Manager) subscriptionInfoPath() string {
-	return filepath.Join(m.dir, "subinfo.json")
+func (m *Manager) subscriptionInfoPath(file string) string {
+	return m.subscriptionPath(file) + "-info.json"
 }
 
-// SubscriptionInfo returns the stored quota info, or nil when the provider
-// never sent one.
-func (m *Manager) SubscriptionInfo() *SubscriptionInfo {
-	data, err := os.ReadFile(m.subscriptionInfoPath())
+// SubscriptionInfo returns the stored quota info for a subscription file,
+// or nil when the provider never sent one.
+func (m *Manager) SubscriptionInfo(file string) *SubscriptionInfo {
+	data, err := os.ReadFile(m.subscriptionInfoPath(file))
 	if err != nil {
 		return nil
 	}
@@ -119,10 +138,12 @@ func parseSubscriptionUserinfo(h string) (info SubscriptionInfo, ok bool) {
 	return info, ok
 }
 
-// DownloadSubscription fetches url and stores it for the file provider,
-// returning the number of proxies it holds. A subscription that is not a
-// Clash YAML document is rejected with ErrNotClashYAML (the config then
-// falls back to an http provider, letting mihomo convert it).
+// DownloadSubscription fetches url and stores it under file for the file
+// provider, returning the number of proxies and the profile title the
+// provider suggested (profile-title / profile-name header, URL fragment).
+// A subscription that is not a Clash YAML document is rejected with
+// ErrNotClashYAML (the config then falls back to an http provider, letting
+// mihomo convert it).
 //
 // The download goes through the app, not the core, so it works when the
 // core cannot reach the subscription host directly (a common case with
@@ -133,22 +154,22 @@ func parseSubscriptionUserinfo(h string) (info SubscriptionInfo, ok bool) {
 // especially — stall or refuse connections intermittently), and each
 // attempt is bounded by its own timeout so a stalled connection cannot
 // hang the whole download.
-func (m *Manager) DownloadSubscription(ctx context.Context, url, proxyAddr string) (int, error) {
+func (m *Manager) DownloadSubscription(ctx context.Context, file, url, proxyAddr string) (int, string, error) {
 	if url == "" {
-		return 0, fmt.Errorf("empty subscription url")
+		return 0, "", fmt.Errorf("empty subscription url")
 	}
 	var lastErr error
 	for attempt := 0; attempt < subscriptionAttempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return 0, ctx.Err()
+				return 0, "", ctx.Err()
 			case <-time.After(time.Duration(attempt) * 2 * time.Second):
 			}
 		}
-		n, err := m.downloadSubscriptionOnce(ctx, url, proxyAddr)
+		n, title, err := m.downloadSubscriptionOnce(ctx, file, url, proxyAddr)
 		if err == nil {
-			return n, nil
+			return n, title, nil
 		}
 		lastErr = err
 		fmt.Fprintf(os.Stderr, "subscription attempt %d/%d failed: %v\n",
@@ -157,67 +178,92 @@ func (m *Manager) DownloadSubscription(ctx context.Context, url, proxyAddr strin
 			break // no point retrying a body we can never use
 		}
 		if errors.Is(err, ctx.Err()) {
-			return 0, err
+			return 0, "", err
 		}
 	}
-	return 0, lastErr
+	return 0, "", lastErr
 }
 
 // subscriptionAttempts is how many times a subscription download is tried.
 const subscriptionAttempts = 3
 
 // downloadSubscriptionOnce performs a single download attempt.
-func (m *Manager) downloadSubscriptionOnce(ctx context.Context, url, proxyAddr string) (int, error) {
+func (m *Manager) downloadSubscriptionOnce(ctx context.Context, file, url, proxyAddr string) (int, string, error) {
 	client := &http.Client{Timeout: 90 * time.Second}
 	if proxyAddr != "" {
 		client.Transport = &http.Transport{Proxy: http.ProxyURL(parseProxyURL(proxyAddr))}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	// Some providers serve different content by user agent.
 	req.Header.Set("User-Agent", "clash-verge/v1.0.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("subscription HTTP %d", resp.StatusCode)
+		return 0, "", fmt.Errorf("subscription HTTP %d", resp.StatusCode)
 	}
-	// Quota metadata lives in the response header, not the body.
+	// Quota metadata and the profile title live in response headers.
 	info, hasInfo := parseSubscriptionUserinfo(resp.Header.Get("subscription-userinfo"))
+	title := subscriptionTitle(resp.Header, url)
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if decoded, ok := decodeBase64Subscription(data); ok {
 		data = decoded
 	}
 	if !isClashYAML(data) {
-		return 0, ErrNotClashYAML
+		return 0, "", ErrNotClashYAML
 	}
 	n := countProxies(data)
 	if n == 0 {
-		return 0, fmt.Errorf("subscription has no proxies")
+		return 0, "", fmt.Errorf("subscription has no proxies")
 	}
-	dest := m.SubscriptionPath()
+	dest := m.subscriptionPath(file)
 	if err := os.WriteFile(dest+".tmp", data, 0o644); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if err := os.Rename(dest+".tmp", dest); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if hasInfo {
 		if encoded, err := json.MarshalIndent(info, "", "  "); err == nil {
-			_ = os.WriteFile(m.subscriptionInfoPath(), encoded, 0o644)
+			_ = os.WriteFile(m.subscriptionInfoPath(file), encoded, 0o644)
 		}
 	} else {
 		// The provider stopped reporting quota: drop the stale copy.
-		_ = os.Remove(m.subscriptionInfoPath())
+		_ = os.Remove(m.subscriptionInfoPath(file))
 	}
-	return n, nil
+	return n, title, nil
+}
+
+// subscriptionTitle derives a display name from the headers ClashX
+// honours (profile-name, then base64 profile-title), falling back to the
+// URL fragment.
+func subscriptionTitle(h http.Header, rawurl string) string {
+	if t := h.Get("profile-name"); t != "" {
+		return strings.TrimSpace(t)
+	}
+	if t := h.Get("profile-title"); t != "" {
+		if enc, ok := strings.CutPrefix(t, "base64,"); ok {
+			if dec, err := base64.StdEncoding.DecodeString(enc); err == nil {
+				return strings.TrimSpace(string(dec))
+			}
+		}
+		return strings.TrimSpace(t)
+	}
+	if u, err := url.Parse(rawurl); err == nil && u.Fragment != "" {
+		if name, err := url.QueryUnescape(u.Fragment); err == nil {
+			return name
+		}
+		return u.Fragment
+	}
+	return ""
 }
 
 // isClashYAML reports whether data looks like a Clash config with a

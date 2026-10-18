@@ -7,6 +7,10 @@ import (
 	"syscall"
 )
 
+// lockFile keeps the descriptor alive for the process lifetime: if it were
+// only a local, the GC finaliser would close it and release the flock.
+var lockFile *os.File
+
 // singleInstanceLock holds an flock on path for the process lifetime; a
 // second instance would tear down the first one's core, so it must refuse
 // to start.
@@ -15,5 +19,9 @@ func singleInstanceLock(path string) bool {
 	if err != nil {
 		return true
 	}
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		return false
+	}
+	lockFile = f
+	return true
 }

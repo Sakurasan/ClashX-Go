@@ -7,11 +7,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-
-	"clashx-go/core"
 
 	"github.com/smallnest/uix/components/button"
 	"github.com/smallnest/uix/components/field"
@@ -25,42 +24,61 @@ type toastMsg struct {
 	desc  string
 }
 
+// subscriptionProfile is one managed subscription, the ClashX 托管配置
+// entry: a display name, its URL and the local file holding the download.
+type subscriptionProfile struct {
+	Name      string    `json:"name"`
+	URL       string    `json:"url"`
+	File      string    `json:"file"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // settings holds the editable controller configuration.
 type settings struct {
-	mixedPort       string
-	controller      string
-	secret          string
-	configPath      string
-	subscriptionURL string
-	startAtLogin    bool
-	systemProxy     bool
-	allowLAN        bool
-	showTraffic     bool
-	tun             bool
+	mixedPort      string
+	controller     string
+	secret         string
+	configPath     string
+	profiles       []subscriptionProfile
+	activeProfile  string
+	autoUpdate     bool
+	updateInterval int // minutes
+	startAtLogin   bool
+	systemProxy    bool
+	allowLAN       bool
+	showTraffic    bool
+	tun            bool
 }
 
 // settingsJSON is the wire form of settings. It exists because the in-memory
 // fields are unexported (so the view can mutate them directly), and
 // encoding/json cannot unmarshal into unexported fields.
 type settingsJSON struct {
-	MixedPort       string `json:"mixedPort"`
-	Controller      string `json:"controller"`
-	Secret          string `json:"secret"`
-	ConfigPath      string `json:"configPath"`
-	SubscriptionURL string `json:"subscriptionURL"`
-	StartAtLogin    bool   `json:"startAtLogin"`
-	SystemProxy     bool   `json:"systemProxy"`
-	AllowLAN        bool   `json:"allowLAN"`
-	ShowTraffic     *bool  `json:"showTraffic,omitempty"`
-	TUN             bool   `json:"tun"`
+	MixedPort      string                `json:"mixedPort"`
+	Controller     string                `json:"controller"`
+	Secret         string                `json:"secret"`
+	ConfigPath     string                `json:"configPath"`
+	Profiles       []subscriptionProfile `json:"profiles"`
+	ActiveProfile  string                `json:"activeProfile"`
+	AutoUpdate     bool                  `json:"autoUpdate"`
+	UpdateInterval int                   `json:"updateInterval"`
+	StartAtLogin   bool                  `json:"startAtLogin"`
+	SystemProxy    bool                  `json:"systemProxy"`
+	AllowLAN       bool                  `json:"allowLAN"`
+	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
+	TUN            bool                  `json:"tun"`
+	// Legacy single-subscription field, migrated into Profiles on load.
+	SubscriptionURL string `json:"subscriptionURL,omitempty"`
 }
 
 // loadSettings reads persisted settings from the app config dir.
 func loadSettings(dir string) *settings {
 	s := &settings{
-		mixedPort:   "7890",
-		controller:  "9090",
-		showTraffic: true,
+		mixedPort:      "7890",
+		controller:     "9090",
+		showTraffic:    true,
+		autoUpdate:     true,
+		updateInterval: 360,
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
 	if err != nil {
@@ -74,7 +92,12 @@ func loadSettings(dir string) *settings {
 	s.controller = w.Controller
 	s.secret = w.Secret
 	s.configPath = w.ConfigPath
-	s.subscriptionURL = w.SubscriptionURL
+	s.profiles = w.Profiles
+	s.activeProfile = w.ActiveProfile
+	s.autoUpdate = w.AutoUpdate
+	if w.UpdateInterval > 0 {
+		s.updateInterval = w.UpdateInterval
+	}
 	s.startAtLogin = w.StartAtLogin
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
@@ -82,22 +105,45 @@ func loadSettings(dir string) *settings {
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
 	}
+	// Migrate the single-URL model: the old default file stays in place.
+	// A hand-picked local config keeps priority, as before.
+	if w.SubscriptionURL != "" && len(s.profiles) == 0 {
+		name := profileNameFromURL(w.SubscriptionURL)
+		s.profiles = append(s.profiles, subscriptionProfile{
+			Name: name, URL: w.SubscriptionURL, File: "sub.yaml",
+			UpdatedAt: subFileMtime(dir, "sub.yaml"),
+		})
+		if s.activeProfile == "" && s.configPath == "" {
+			s.activeProfile = name
+		}
+	}
 	return s
+}
+
+func subFileMtime(dir, file string) time.Time {
+	fi, err := os.Stat(filepath.Join(dir, file))
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
 }
 
 // saveSettings persists settings to the app config dir.
 func saveSettings(dir string, s *settings) {
 	w := settingsJSON{
-		MixedPort:       s.mixedPort,
-		Controller:      s.controller,
-		Secret:          s.secret,
-		ConfigPath:      s.configPath,
-		SubscriptionURL: s.subscriptionURL,
-		StartAtLogin:    s.startAtLogin,
-		SystemProxy:     s.systemProxy,
-		AllowLAN:        s.allowLAN,
-		TUN:             s.tun,
-		ShowTraffic:     &s.showTraffic,
+		MixedPort:      s.mixedPort,
+		Controller:     s.controller,
+		Secret:         s.secret,
+		ConfigPath:     s.configPath,
+		Profiles:       s.profiles,
+		ActiveProfile:  s.activeProfile,
+		AutoUpdate:     s.autoUpdate,
+		UpdateInterval: s.updateInterval,
+		StartAtLogin:   s.startAtLogin,
+		SystemProxy:    s.systemProxy,
+		AllowLAN:       s.allowLAN,
+		TUN:            s.tun,
+		ShowTraffic:    &s.showTraffic,
 	}
 	data, err := json.MarshalIndent(w, "", "  ")
 	if err != nil {
@@ -122,13 +168,7 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			input.Input(c, input.Props{Value: &s.secret, Placeholder: "可选"})
 		})
 		ui.Divider(c)
-		field.Field(c, field.Props{Label: "订阅地址", Hint: "Clash 订阅链接 — 自动拉取并更新节点"}, func() {
-			ui.Row(c).Gap(6).Children(func() {
-				input.Input(c, input.Props{Value: &s.subscriptionURL, Placeholder: "https://…/subscribe?token=…"}).Grow(1)
-			})
-		})
-		ui.Divider(c)
-		field.Field(c, field.Props{Label: "本地配置", Hint: "加载本地 config.yaml（优先于订阅）"}, func() {
+		field.Field(c, field.Props{Label: "本地配置", Hint: "加载本地 config.yaml（选择后停用托管订阅）"}, func() {
 			ui.Row(c).Gap(6).Children(func() {
 				input.Input(c, input.Props{Value: &s.configPath, Placeholder: "config.yaml 路径"}).Grow(1)
 				button.Button(c, button.Props{
@@ -173,25 +213,22 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 
 // saveAndRestart persists the settings and restarts the core with them.
 func (p *panelApp) saveAndRestart() {
-	cfg := p.currentConfig()
-	cfg.MixedPort = parsePort(p.app.settings.mixedPort, cfg.MixedPort)
-	cfg.ControllerPort = parsePort(p.app.settings.controller, cfg.ControllerPort)
-	cfg.Secret = p.app.settings.secret
-	cfg.ConfigPath = p.app.settings.configPath
-	cfg.SubscriptionURL = p.app.settings.subscriptionURL
-	saveSettings(coreDir(), p.app.settings)
+	st := p.app.settings
+	if st.configPath != "" {
+		st.activeProfile = "" // a hand-set local path wins over a profile
+	}
+	saveSettings(coreDir(), st)
+	p.app.menu.rebuild()
+	cfg := p.app.settingsConfig()
 	go func() {
 		// Refresh the subscription while the old core may still be running,
 		// so the fetch itself can be proxied through it (the subscription
 		// host is often unreachable directly). A failure is non-fatal: the
 		// previous copy stays in place.
 		if cfg.SubscriptionURL != "" && p.app.ctrl != nil {
-			if _, err := p.app.ctrl.Manager().RefreshSubscription(context.Background(), cfg); err != nil {
+			if _, _, err := p.app.ctrl.Manager().RefreshSubscription(context.Background(), cfg); err != nil {
 				log.Println("subscription refresh: ", err)
 			}
-		}
-		if p.app.ctrl != nil {
-			p.app.ctrl.Stop()
 		}
 		if err := p.app.restartCore(cfg); err != nil {
 			p.app.showToast("重启失败", err.Error())
@@ -199,15 +236,6 @@ func (p *panelApp) saveAndRestart() {
 			p.app.showToast("核心已重启", "正在使用新的设置运行。")
 		}
 	}()
-}
-
-// currentConfig returns the controller's current configuration, or the
-// defaults when no controller exists yet.
-func (p *panelApp) currentConfig() core.Config {
-	if p.app.ctrl != nil {
-		return p.app.ctrl.Config()
-	}
-	return core.DefaultConfig()
 }
 
 func parsePort(s string, def int) int {

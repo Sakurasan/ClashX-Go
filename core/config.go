@@ -29,6 +29,9 @@ type Config struct {
 	// provider pointing at the local copy; only when the download failed
 	// or the body is not Clash YAML does it fall back to an http provider.
 	SubscriptionURL string `json:"subscription-url"`
+	// SubscriptionFile overrides the downloaded-subscription file name
+	// (default SubscriptionFile). Managed profiles each keep their own.
+	SubscriptionFile string `json:"subscription-file"`
 	// AllowLAN lets devices on the local network use the mixed port.
 	AllowLAN bool `json:"allow-lan"`
 	// TUN enables the core's TUN interface. Opening the device needs
@@ -50,6 +53,14 @@ type ConfigError struct{ Path string }
 
 func (e *ConfigError) Error() string { return "config file not found: " + e.Path }
 
+// subFile returns the subscription file name this config uses.
+func (c Config) subFile() string {
+	if c.SubscriptionFile != "" {
+		return c.SubscriptionFile
+	}
+	return SubscriptionFile
+}
+
 // flowNameRE extracts the name from a flow-style group entry,
 // e.g. `- {name: 节点选择, type: select, …}`.
 var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*,`)
@@ -70,10 +81,8 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "mixed-port: %d\n", cfg.MixedPort)
 	fmt.Fprintf(&b, "allow-lan: %t\n", cfg.AllowLAN)
-	if cfg.TUN {
-		b.WriteString("tun:\n  enable: true\n  stack: system\n" +
-			"  strict-route: false\n  dns-hijack:\n    - any:53\n")
-	}
+	fmt.Fprintf(&b, "tun:\n  enable: %t\n  stack: system\n"+
+		"  strict-route: false\n  dns-hijack:\n    - any:53\n", cfg.TUN)
 	skipBlock := false
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -209,18 +218,20 @@ func (c Config) WriteYAML(dir string) (string, error) {
 	b.WriteString("log-level: info\n")
 	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
 		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
-	if c.TUN {
-		b.WriteString("tun:\n  enable: true\n  stack: system\n" +
-			"  strict-route: false\n  dns-hijack:\n    - any:53\n")
-	}
+	fmt.Fprintf(&b, "tun:\n  enable: %t\n  stack: system\n"+
+		"  strict-route: false\n  dns-hijack:\n    - any:53\n", c.TUN)
 
 	switch {
 	case c.ConfigPath != "":
 		b.WriteString("rules:\n  - MATCH,DIRECT\n")
 	case c.SubscriptionURL != "":
+		file := c.SubscriptionFile
+		if file == "" {
+			file = SubscriptionFile
+		}
 		local := ""
-		if fi, err := os.Stat(filepath.Join(dir, SubscriptionFile)); err == nil && fi.Size() > 0 {
-			local = SubscriptionFile
+		if fi, err := os.Stat(filepath.Join(dir, file)); err == nil && fi.Size() > 0 {
+			local = file
 		}
 		b.WriteString(providerBlock(local, c.SubscriptionURL))
 	default:

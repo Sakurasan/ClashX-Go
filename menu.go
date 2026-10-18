@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,9 +73,7 @@ func (m *trayMenu) build(s core.State) {
 	m.mode = s.Mode
 	m.modeItem = &mygo.MenuItem{Label: "出站模式 (" + modeNames[s.Mode] + ")", Submenu: modeSub}
 
-	m.coreItem = &mygo.MenuItem{Label: coreItemLabel(s.Running), Click: func(*mygo.MenuItem, *mygo.Window) { a.toggleCore() }}
-
-	items := []*mygo.MenuItem{m.modeItem, m.coreItem, mygo.Separator()}
+	items := []*mygo.MenuItem{m.modeItem, mygo.Separator()}
 	for _, g := range s.Groups {
 		items = append(items, m.groupItem(g))
 	}
@@ -92,7 +91,7 @@ func (m *trayMenu) build(s core.State) {
 		Type:        mygo.MenuItemCheckbox,
 		Checked:     st.tun,
 		Accelerator: "Cmd+E",
-		ToolTip:     "开启时会请求一次管理员授权（创建 utun 设备）",
+		ToolTip:     "首次开启需授权安装提权组件，之后免密",
 	}
 	m.tunItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setTUNToggle(it) }
 	copyCmd := &mygo.MenuItem{Label: "复制终端代理命令", Accelerator: "Cmd+C", Click: func(*mygo.MenuItem, *mygo.Window) { a.copyProxyCommand() }}
@@ -122,18 +121,12 @@ func (m *trayMenu) build(s core.State) {
 	m.lanItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setLANToggle(it) }
 	items = append(items, m.loginItem, m.speedItem, m.lanItem, mygo.Separator())
 
-	testAll := &mygo.MenuItem{Label: "延迟测速", Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups() }}
+	testAll := &mygo.MenuItem{Label: "延迟测速", Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups(); a.reopenMenu() }}
 	console := &mygo.MenuItem{Label: "控制台", Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabOverview) }}
 	items = append(items, testAll, console, mygo.Separator())
 
 	m.subInfoIt = &mygo.MenuItem{Label: subInfoLabel(s), Disabled: true}
-	config := &mygo.MenuItem{Label: "配置", Submenu: append([]*mygo.MenuItem{m.subInfoIt, mygo.Separator()},
-		&mygo.MenuItem{Label: "更新订阅", Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
-		&mygo.MenuItem{Label: "托管配置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabSettings) }},
-		&mygo.MenuItem{Label: "本地配置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.chooseLocalConfig() }},
-		mygo.Separator(),
-		&mygo.MenuItem{Label: "打开配置文件夹", Click: func(*mygo.MenuItem, *mygo.Window) { _ = mygo.Shell.OpenPath(coreDir()) }},
-	)}
+	config := &mygo.MenuItem{Label: "配置", Submenu: m.configSubmenu()}
 	more := &mygo.MenuItem{Label: "更多设置", Submenu: []*mygo.MenuItem{
 		{Label: "偏好设置…", Accelerator: "Cmd+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabSettings) }},
 	}}
@@ -155,7 +148,7 @@ func (m *trayMenu) groupItem(g *core.GroupView) *mygo.MenuItem {
 	ge := &groupEntry{name: g.Name, members: map[string]*mygo.MenuItem{}, labels: map[string]string{}, current: g.Current}
 	group := g.Name
 	sub := []*mygo.MenuItem{
-		{Label: "延迟测速", Click: func(*mygo.MenuItem, *mygo.Window) { m.app.testGroup(group) }},
+		{Label: "延迟测速", Click: func(*mygo.MenuItem, *mygo.Window) { go m.app.testGroup(group); m.app.reopenMenu() }},
 		mygo.Separator(),
 	}
 	for _, name := range g.Members {
@@ -180,6 +173,7 @@ func (m *trayMenu) groupItem(g *core.GroupView) *mygo.MenuItem {
 func (m *trayMenu) refresh(s core.State) {
 	a := m.app
 	if groupsSignature(s.Groups) != m.groupSig {
+		log.Printf("menu rebuild: %d groups", len(s.Groups))
 		m.build(s)
 		a.tray.SetMenu(m.menu)
 		return
@@ -191,10 +185,8 @@ func (m *trayMenu) refresh(s core.State) {
 			it.SetChecked(mode == s.Mode)
 		}
 	}
-	want := coreItemLabel(s.Running)
 	if s.Running != m.coreRun {
 		m.coreRun = s.Running
-		m.coreItem.SetLabel(want)
 		a.updateTrayIcon(s.Running)
 	}
 	for _, g := range s.Groups {
@@ -261,14 +253,6 @@ func (a *app) setMode(mode string) {
 	}
 }
 
-func (a *app) toggleCore() {
-	if a.ctrl.State().Running {
-		go a.stopCore()
-	} else {
-		go a.startCore()
-	}
-}
-
 func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 	on := it.IsChecked()
 	if on && !a.ctrl.State().Running {
@@ -310,13 +294,41 @@ func (a *app) setLANToggle(it *mygo.MenuItem) {
 	}()
 }
 
-// setTUNToggle persists the Tun switch and restarts the core with (or
-// without) the tun block. Opening the utun device needs administrator
-// rights, so a plain launch fails fast and the switch rolls back.
+// setTUNToggle flips Tun mode. With a privileged core already running the
+// switch is a hot API patch (ClashX-instant); otherwise it persists the
+// setting and restarts the core, rolling back if the restart fails.
 func (a *app) setTUNToggle(it *mygo.MenuItem) {
 	on := it.IsChecked()
 	a.settings.tun = on
 	saveSettings(coreDir(), a.settings)
+	mgr := a.ctrl.Manager()
+	if on || mgr.Privileged() {
+		if a.ctrl.State().Running && mgr.Privileged() {
+			go func() {
+				offset := mgr.LogSize()
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err := a.ctrl.SetTUN(ctx, on)
+				cancel()
+				if err == nil && on {
+					// mihomo reports a failed utun only in the log.
+					time.Sleep(1500 * time.Millisecond)
+					err = mgr.TUNErrorAfter(offset)
+				}
+				if err == nil {
+					return
+				}
+				// Hot switch failed: fall back to a full restart.
+				if rerr := a.restartCore(a.settingsConfig()); rerr == nil {
+					return
+				}
+				a.settings.tun = !on
+				saveSettings(coreDir(), a.settings)
+				a.menu.tunItem.SetChecked(!on)
+				a.reportError("Tun 模式", err.Error())
+			}()
+			return
+		}
+	}
 	go func() {
 		err := a.restartCore(a.settingsConfig())
 		if err == nil {
@@ -361,18 +373,20 @@ func (a *app) selectProxy(group, member string) {
 }
 
 func (a *app) updateSubscription() {
-	if a.settings.subscriptionURL == "" {
-		a.reportError("未配置订阅", "请先在偏好设置里填写订阅地址。")
-		a.showPanel(tabSettings)
+	p := a.activeSub()
+	if p == nil {
+		a.reportError("更新订阅", "当前没有选中的托管订阅。")
+		a.showSubscriptionDialog()
 		return
 	}
 	go func() {
-		n, err := a.ctrl.RefreshSubscription(context.Background())
+		n, err := a.updateProfile(p.Name)
 		if err != nil {
 			a.reportError("订阅更新失败", err.Error())
 			return
 		}
-		a.showToast("订阅已更新", fmt.Sprintf("%d 个节点已重载。", n))
+		a.menu.rebuild()
+		a.showToast("订阅已更新", fmt.Sprintf("%s：%d 个节点已重载。", p.Name, n))
 	}()
 }
 
@@ -384,13 +398,7 @@ func (a *app) chooseLocalConfig() {
 	if err != nil || len(files) == 0 {
 		return
 	}
-	a.settings.configPath = files[0]
-	saveSettings(coreDir(), a.settings)
-	go func() {
-		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.reportError("加载本地配置失败", err.Error())
-		}
-	}()
+	a.selectLocalConfig(files[0])
 }
 
 func (a *app) reloadCore() {
@@ -407,18 +415,118 @@ func (a *app) closeConnections() {
 	_ = a.ctrl.CloseConnections(ctx)
 }
 
+// configSubmenu mirrors ClashX Meta's 配置 menu: the managed profiles list
+// with the active one checked, file operations, and the 托管配置 submenu.
+func (m *trayMenu) configSubmenu() []*mygo.MenuItem {
+	a := m.app
+	st := a.settings
+	var items []*mygo.MenuItem
+	for _, p := range st.profiles {
+		p := p
+		it := &mygo.MenuItem{
+			Label:   p.Name,
+			Type:    mygo.MenuItemRadio,
+			Checked: st.activeProfile == p.Name,
+		}
+		it.Click = func(*mygo.MenuItem, *mygo.Window) { a.selectProfile(p.Name) }
+		items = append(items, it)
+	}
+	localLabel := "本地配置…"
+	if st.configPath != "" {
+		localLabel = "本地配置: " + filepath.Base(st.configPath)
+	}
+	local := &mygo.MenuItem{
+		Label:   localLabel,
+		Type:    mygo.MenuItemRadio,
+		Checked: st.activeProfile == "" && st.configPath != "",
+	}
+	local.Click = func(*mygo.MenuItem, *mygo.Window) {
+		if st.configPath == "" {
+			a.chooseLocalConfig()
+		} else {
+			a.selectLocalConfig(st.configPath)
+		}
+	}
+	items = append(items, local, mygo.Separator(),
+		&mygo.MenuItem{Label: "打开配置文件夹", Accelerator: "Cmd+O",
+			Click: func(*mygo.MenuItem, *mygo.Window) { _ = mygo.Shell.OpenPath(coreDir()) }},
+		&mygo.MenuItem{Label: "重载配置文件", Accelerator: "Cmd+R",
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.reloadCore() }},
+		&mygo.MenuItem{Label: "更新外部资源", Accelerator: "Shift+Cmd+U",
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
+	)
+	managed := &mygo.MenuItem{Label: "托管配置", Submenu: []*mygo.MenuItem{
+		{Label: "管理", Accelerator: "Cmd+M", Click: func(*mygo.MenuItem, *mygo.Window) { a.showManageWindow() }},
+		{Label: "更新", Accelerator: "Cmd+U", Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
+		m.autoUpdateItem(),
+		{Label: "设置更新间隔", Submenu: intervalItems(a)},
+	}}
+	return append(items, managed)
+}
+
+// autoUpdateItem builds the 自动更新 checkbox bound to settings.
+func (m *trayMenu) autoUpdateItem() *mygo.MenuItem {
+	it := &mygo.MenuItem{
+		Label:   "自动更新",
+		Type:    mygo.MenuItemCheckbox,
+		Checked: m.app.settings.autoUpdate,
+	}
+	it.Click = func(it *mygo.MenuItem, _ *mygo.Window) {
+		m.app.settings.autoUpdate = it.IsChecked()
+		saveSettings(coreDir(), m.app.settings)
+	}
+	return it
+}
+
+var updateIntervals = []struct {
+	label string
+	min   int
+}{
+	{"30 分钟", 30}, {"1 小时", 60}, {"6 小时", 360}, {"12 小时", 720}, {"24 小时", 1440},
+}
+
+func intervalItems(a *app) []*mygo.MenuItem {
+	var items []*mygo.MenuItem
+	for _, iv := range updateIntervals {
+		iv := iv
+		it := &mygo.MenuItem{
+			Label:   iv.label,
+			Type:    mygo.MenuItemRadio,
+			Checked: a.settings.updateInterval == iv.min,
+		}
+		it.Click = func(*mygo.MenuItem, *mygo.Window) {
+			a.settings.updateInterval = iv.min
+			saveSettings(coreDir(), a.settings)
+			a.menu.rebuild()
+		}
+		items = append(items, it)
+	}
+	return items
+}
+
+// rebuild reconstructs the whole tray menu after a structural change
+// (profiles, groups) and reinstalls it on the tray.
+func (m *trayMenu) rebuild() {
+	m.build(m.app.ctrl.State())
+	m.app.tray.SetMenu(m.menu)
+}
+
+// reopenMenu re-pops the tray menu after an action ClashX keeps the menu
+// open for (延迟测速): NSMenu dismisses on any click, so we show it again
+// on the next main-loop pass while the tests run in the background.
+func (a *app) reopenMenu() {
+	a.win.Update(func() {
+		if b := a.tray.Bounds(); b.Width > 0 && b.Height > 0 {
+			a.tray.PopUpMenu()
+		}
+	})
+}
+
 func (a *app) mixedPort() int {
 	return parsePort(a.settings.mixedPort, core.DefaultConfig().MixedPort)
 }
 
 // --- label helpers ---
-
-func coreItemLabel(running bool) string {
-	if running {
-		return "停止核心"
-	}
-	return "启动核心"
-}
 
 func groupLabel(name, current string) string {
 	if current == "" {

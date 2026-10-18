@@ -131,9 +131,9 @@ func (c *Controller) Start(ctx context.Context) error {
 	c.setState(func(s *State) {
 		s.Running = true
 		s.Version = c.mgr.Version()
-		s.SubProxies = c.mgr.SubscriptionProxyCount()
-		s.SubUpdated = c.mgr.SubscriptionUpdatedAt()
-		s.SubInfo = c.mgr.SubscriptionInfo()
+		s.SubProxies = c.mgr.SubscriptionProxyCount(c.cfg.subFile())
+		s.SubUpdated = c.mgr.SubscriptionUpdatedAt(c.cfg.subFile())
+		s.SubInfo = c.mgr.SubscriptionInfo(c.cfg.subFile())
 	})
 	c.beginLoops(ctx)
 	return nil
@@ -180,9 +180,9 @@ func (c *Controller) pollLoop(ctx context.Context) {
 			return
 		}
 		subCheckedAt = time.Now()
-		n := c.mgr.SubscriptionProxyCount()
-		at := c.mgr.SubscriptionUpdatedAt()
-		info := c.mgr.SubscriptionInfo()
+		n := c.mgr.SubscriptionProxyCount(c.cfg.subFile())
+		at := c.mgr.SubscriptionUpdatedAt(c.cfg.subFile())
+		info := c.mgr.SubscriptionInfo(c.cfg.subFile())
 		c.setState(func(s *State) {
 			s.SubProxies = n
 			s.SubUpdated = at
@@ -274,6 +274,11 @@ func (c *Controller) SelectProxy(ctx context.Context, group, member string) erro
 	return nil
 }
 
+// SetTUN hot-toggles the core's TUN interface without a restart.
+func (c *Controller) SetTUN(ctx context.Context, enable bool) error {
+	return c.client.SetTUN(ctx, enable)
+}
+
 // SetMode changes the global mode and reflects it locally.
 func (c *Controller) SetMode(ctx context.Context, mode string) error {
 	if err := c.client.SetMode(ctx, mode); err != nil {
@@ -359,26 +364,26 @@ func (c *Controller) CloseConnections(ctx context.Context) error {
 // RefreshSubscription re-downloads the subscription and, when the core is
 // running, reloads providers so the new nodes take effect immediately. It
 // returns the number of proxies in the freshly downloaded file.
-func (c *Controller) RefreshSubscription(ctx context.Context) (int, error) {
+func (c *Controller) RefreshSubscription(ctx context.Context) (int, string, error) {
 	c.SetSubDownloading(true)
-	n, err := c.mgr.RefreshSubscription(ctx, c.cfg)
+	n, title, err := c.mgr.RefreshSubscription(ctx, c.cfg)
 	c.setState(func(s *State) {
 		s.SubDownloading = false
 		if err == nil {
 			s.SubProxies = n
 			s.SubUpdated = time.Now()
-			s.SubInfo = c.mgr.SubscriptionInfo()
+			s.SubInfo = c.mgr.SubscriptionInfo(c.cfg.subFile())
 		}
 	})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if c.mgr.Running() {
 		// The file provider is loaded at startup; ask the core to reload it
 		// so the running config picks up the fresh nodes.
 		_ = c.client.ReloadProvider(ctx, "provider")
 	}
-	return n, nil
+	return n, title, nil
 }
 
 // SetSubDownloading marks the state while a subscription download runs.

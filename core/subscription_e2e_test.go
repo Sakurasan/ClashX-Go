@@ -52,7 +52,7 @@ func TestSubscriptionE2E(t *testing.T) {
 	// App downloads the subscription first (not the core).
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	n, err := mgr.DownloadSubscription(ctx, url, "")
+	n, _, err := mgr.DownloadSubscription(ctx, SubscriptionFile, url, "")
 	if err != nil {
 		t.Fatalf("DownloadSubscription: %v", err)
 	}

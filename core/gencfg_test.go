@@ -179,12 +179,12 @@ func TestWriteRunningConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, want := range []string{"mixed-port: 7890", "allow-lan: false", "Gmixed-port", "name: A", "mode: Rule"} {
+	for _, want := range []string{"mixed-port: 7890", "allow-lan: false", "Gmixed-port", "name: A", "mode: Rule", "tun:\n  enable: false"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in:\n%s", want, s)
 		}
 	}
-	for _, bad := range []string{"mixed-port: 1111", "allow-lan: true", "tun:", "stack: mixed"} {
+	for _, bad := range []string{"mixed-port: 1111", "allow-lan: true", "stack: mixed"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("should not contain %q in:\n%s", bad, s)
 		}

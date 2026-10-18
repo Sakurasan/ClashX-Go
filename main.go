@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -25,13 +26,17 @@ type app struct {
 	settings *settings
 	panel    *panelApp
 	menu     *trayMenu
+	subDlg   *subscriptionDialog
+	manage   *manageWindow
 	win      *mygo.Window
 	tray     *mygo.Tray
 	quitting bool
 
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
-	// against a still-finishing operation.
-	coreOp sync.Mutex
+	// against a still-finishing operation. userStopped marks an explicit
+	// user stop that the auto-retry loop must respect.
+	coreOp      sync.Mutex
+	userStopped bool
 }
 
 func main() {
@@ -111,6 +116,7 @@ func (a *app) ready() {
 
 	// Boot the core in the background on launch.
 	go a.startCore()
+	go a.autoUpdateLoop(context.Background())
 }
 
 func (a *app) onState(s core.State) {
@@ -125,12 +131,20 @@ func (a *app) onState(s core.State) {
 		// Marshal onto the main thread: the menu's items and structure are
 		// only ever mutated there, together with the click handlers.
 		a.win.Update(func() { a.menu.refresh(s) })
+	} else {
+		log.Printf("onState: no window, running=%v groups=%d", s.Running, len(s.Groups))
 	}
 }
 
-func (a *app) startCore() {
+func (a *app) startCore() { a.startCoreReport(true) }
+
+// startCoreReport brings the core up. A failed start schedules a silent
+// retry (ClashX has no manual start switch: transient conflicts must
+// self-heal); report only governs the first, user-visible error.
+func (a *app) startCoreReport(report bool) {
 	a.coreOp.Lock()
 	defer a.coreOp.Unlock()
+	a.userStopped = false
 	if a.ctrl.Manager().Running() {
 		// A quick 停止→启动 or double click: the previous op already won
 		// the race, and Manager.Start would only error "already running".
@@ -147,14 +161,27 @@ func (a *app) startCore() {
 		a.ctrl.SetSubDownloading(true)
 	}
 	if err := a.ctrl.Start(ctx); err != nil {
-		a.reportError("核心启动失败", err.Error())
+		if report {
+			a.reportError("核心启动失败", err.Error())
+		}
+		a.ctrl.SetSubDownloading(false)
+		time.AfterFunc(30*time.Second, func() {
+			if a.quitting || a.userStopped || a.ctrl.State().Running {
+				return
+			}
+			a.startCoreReport(false)
+		})
+		return
 	}
 	a.ctrl.SetSubDownloading(false)
 }
 
+// stopCore is the user's explicit stop (panel footer); it cancels the
+// auto-retry loop so the core stays down.
 func (a *app) stopCore() {
 	a.coreOp.Lock()
 	defer a.coreOp.Unlock()
+	a.userStopped = true
 	a.ctrl.Stop()
 }
 
@@ -171,14 +198,18 @@ func (a *app) restartCore(cfg core.Config) error {
 // settingsConfig builds the controller config from the app settings.
 func (a *app) settingsConfig() core.Config {
 	cfg := core.DefaultConfig()
-	if a.settings != nil {
-		cfg.MixedPort = parsePort(a.settings.mixedPort, cfg.MixedPort)
-		cfg.ControllerPort = parsePort(a.settings.controller, cfg.ControllerPort)
-		cfg.Secret = a.settings.secret
-		cfg.ConfigPath = a.settings.configPath
-		cfg.SubscriptionURL = a.settings.subscriptionURL
-		cfg.AllowLAN = a.settings.allowLAN
-		cfg.TUN = a.settings.tun
+	if s := a.settings; s != nil {
+		cfg.MixedPort = parsePort(s.mixedPort, cfg.MixedPort)
+		cfg.ControllerPort = parsePort(s.controller, cfg.ControllerPort)
+		cfg.Secret = s.secret
+		cfg.AllowLAN = s.allowLAN
+		cfg.TUN = s.tun
+		if p := a.activeSub(); p != nil {
+			cfg.SubscriptionURL = p.URL
+			cfg.SubscriptionFile = p.File
+		} else {
+			cfg.ConfigPath = s.configPath
+		}
 	}
 	return cfg
 }

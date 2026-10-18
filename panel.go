@@ -149,7 +149,7 @@ func (p *panelApp) subscriptionBox(c *ui.Context, s core.State) {
 				Disabled: s.SubDownloading,
 				OnClick: func() {
 					go func() {
-						n, err := p.app.ctrl.RefreshSubscription(context.Background())
+						n, _, err := p.app.ctrl.RefreshSubscription(context.Background())
 						if err != nil {
 							p.app.showToast("订阅更新失败", err.Error())
 							return
