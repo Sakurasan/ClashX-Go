@@ -132,6 +132,13 @@ func (p *panelApp) subscriptionBox(c *ui.Context, s core.State) {
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				ui.Text(c, "订阅").FontSize(12).TextColor(t.TextMuted)
 				ui.Text(c, fmt.Sprintf("%d 个节点", s.SubProxies)).FontSize(16).Bold()
+				if info := s.SubInfo; info != nil && info.Total > 0 {
+					quota := fmt.Sprintf("流量 %s / %s", humanBytes(info.Upload+info.Download), humanBytes(info.Total))
+					if !info.Expire.IsZero() {
+						quota += " · 到期 " + info.Expire.Local().Format("2006-01-02")
+					}
+					ui.Text(c, quota).FontSize(11).TextColor(t.TextMuted).SingleLine()
+				}
 				if !s.SubUpdated.IsZero() {
 					ui.Text(c, "更新于 "+s.SubUpdated.Local().Format("2006-01-02 15:04")).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}

@@ -35,7 +35,15 @@ func setSystemProxy(enable bool, port int) error {
 			return errors.New(out)
 		}
 	}
+	// ClashX keeps local and Apple time-sync traffic off the proxy.
+	if out, err := networksetup(append([]string{"-setproxybypassdomains", svc}, proxyBypassDomains...)...); err != nil {
+		return errors.New(out)
+	}
 	return nil
+}
+
+var proxyBypassDomains = []string{
+	"127.*", "192.168.*", "10.*", "localhost", "*.local", "timestamp.apple.com",
 }
 
 // activeNetworkService returns the networksetup service name ("Wi-Fi",

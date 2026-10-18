@@ -22,10 +22,12 @@ type State struct {
 	Log      []string
 
 	// Subscription status, refreshed with the poll loop. SubProxies is the
-	// node count of the downloaded subscription (0 when none).
+	// node count of the downloaded subscription (0 when none). SubInfo is
+	// the provider's quota header, nil when it sent none.
 	SubProxies     int
 	SubUpdated     time.Time
 	SubDownloading bool
+	SubInfo        *SubscriptionInfo
 }
 
 // GroupView is the UI-ready form of a policy group.
@@ -118,6 +120,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		s.Version = c.mgr.Version()
 		s.SubProxies = c.mgr.SubscriptionProxyCount()
 		s.SubUpdated = c.mgr.SubscriptionUpdatedAt()
+		s.SubInfo = c.mgr.SubscriptionInfo()
 	})
 	c.beginLoops(ctx)
 	return nil
@@ -165,9 +168,11 @@ func (c *Controller) pollLoop(ctx context.Context) {
 		subCheckedAt = time.Now()
 		n := c.mgr.SubscriptionProxyCount()
 		at := c.mgr.SubscriptionUpdatedAt()
+		info := c.mgr.SubscriptionInfo()
 		c.setState(func(s *State) {
 			s.SubProxies = n
 			s.SubUpdated = at
+			s.SubInfo = info
 		})
 	}
 	refresh := func() {
@@ -281,6 +286,7 @@ func (c *Controller) RefreshSubscription(ctx context.Context) (int, error) {
 		if err == nil {
 			s.SubProxies = n
 			s.SubUpdated = time.Now()
+			s.SubInfo = c.mgr.SubscriptionInfo()
 		}
 	})
 	if err != nil {

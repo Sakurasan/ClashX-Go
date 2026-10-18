@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -60,6 +62,61 @@ func (m *Manager) SubscriptionStale(maxAge time.Duration) bool {
 		return true
 	}
 	return time.Since(fi.ModTime()) >= maxAge
+}
+
+// SubscriptionInfo is the quota metadata a provider returns in the
+// subscription-userinfo response header, stored beside the subscription.
+type SubscriptionInfo struct {
+	Upload   int64     `json:"upload"`
+	Download int64     `json:"download"`
+	Total    int64     `json:"total"`
+	Expire   time.Time `json:"expire"`
+}
+
+func (m *Manager) subscriptionInfoPath() string {
+	return filepath.Join(m.dir, "subinfo.json")
+}
+
+// SubscriptionInfo returns the stored quota info, or nil when the provider
+// never sent one.
+func (m *Manager) SubscriptionInfo() *SubscriptionInfo {
+	data, err := os.ReadFile(m.subscriptionInfoPath())
+	if err != nil {
+		return nil
+	}
+	var info SubscriptionInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil
+	}
+	return &info
+}
+
+// subscriptionUserinfoRE matches the key=value pairs of the header.
+var subscriptionUserinfoRE = regexp.MustCompile(`(\w+)\s*=\s*(\d+)`)
+
+// parseSubscriptionUserinfo parses "upload=…; download=…; total=…; expire=…"
+// (RFC 9972 style). ok is false when the header carries no usable numbers.
+func parseSubscriptionUserinfo(h string) (info SubscriptionInfo, ok bool) {
+	for _, m := range subscriptionUserinfoRE.FindAllStringSubmatch(h, -1) {
+		n, err := strconv.ParseInt(m[2], 10, 64)
+		if err != nil {
+			continue
+		}
+		ok = true
+		switch m[1] {
+		case "upload":
+			info.Upload = n
+		case "download":
+			info.Download = n
+		case "total":
+			info.Total = n
+		case "expire":
+			if n > 0 {
+				info.Expire = time.Unix(n, 0)
+			}
+		}
+	}
+	return info, ok
 }
 
 // DownloadSubscription fetches url and stores it for the file provider,
@@ -129,6 +186,8 @@ func (m *Manager) downloadSubscriptionOnce(ctx context.Context, url, proxyAddr s
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("subscription HTTP %d", resp.StatusCode)
 	}
+	// Quota metadata lives in the response header, not the body.
+	info, hasInfo := parseSubscriptionUserinfo(resp.Header.Get("subscription-userinfo"))
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		return 0, err
@@ -149,6 +208,14 @@ func (m *Manager) downloadSubscriptionOnce(ctx context.Context, url, proxyAddr s
 	}
 	if err := os.Rename(dest+".tmp", dest); err != nil {
 		return 0, err
+	}
+	if hasInfo {
+		if encoded, err := json.MarshalIndent(info, "", "  "); err == nil {
+			_ = os.WriteFile(m.subscriptionInfoPath(), encoded, 0o644)
+		}
+	} else {
+		// The provider stopped reporting quota: drop the stale copy.
+		_ = os.Remove(m.subscriptionInfoPath())
 	}
 	return n, nil
 }

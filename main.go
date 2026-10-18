@@ -58,7 +58,7 @@ func (a *app) ready() {
 	// Tray: clicking opens the ClashX-style menu; the panel window stays
 	// as the preferences window behind 更多设置.
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
-		Icon:           trayIcon(),
+		Icon:           trayIcon(color.NRGBA{A: 255}),
 		IconIsTemplate: true,
 		ToolTip:        "ClashX Go",
 	})
@@ -91,6 +91,10 @@ func (a *app) ready() {
 		}
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		// Never leave the system pointing at a port that is about to close.
+		if a.settings != nil && a.settings.systemProxy {
+			_ = setSystemProxy(false, a.mixedPort())
+		}
 		a.ctrl.Stop()
 		a.tray.Destroy()
 	})
@@ -153,6 +157,7 @@ func (a *app) settingsConfig() core.Config {
 		cfg.ConfigPath = a.settings.configPath
 		cfg.SubscriptionURL = a.settings.subscriptionURL
 		cfg.AllowLAN = a.settings.allowLAN
+		cfg.TUN = a.settings.tun
 	}
 	return cfg
 }
@@ -194,10 +199,10 @@ func (a *app) show() {
 	a.win.Show()
 }
 
-// trayIcon draws a filled ring, black on transparent, so macOS tints it.
-func trayIcon() []byte {
+// trayIcon draws a filled ring in ink on transparent, black for the
+// template (system-tinted) stopped icon.
+func trayIcon(ink color.NRGBA) []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := color.NRGBA{A: 255}
 	// Outer ring
 	for y := range 32 {
 		for x := range 32 {
@@ -213,6 +218,16 @@ func trayIcon() []byte {
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	return b.Bytes()
+}
+
+// updateTrayIcon swaps between the monochrome stopped icon and a colored
+// running one, like ClashX's icon state.
+func (a *app) updateTrayIcon(running bool) {
+	if running {
+		_ = a.tray.SetIcon(trayIcon(color.NRGBA{R: 37, G: 99, B: 235, A: 255}), false)
+	} else {
+		_ = a.tray.SetIcon(trayIcon(color.NRGBA{A: 255}), true)
+	}
 }
 
 // coreDir returns the per-user directory for the core binary and config.

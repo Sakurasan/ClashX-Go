@@ -29,6 +29,9 @@ type Config struct {
 	SubscriptionURL string `json:"subscription-url"`
 	// AllowLAN lets devices on the local network use the mixed port.
 	AllowLAN bool `json:"allow-lan"`
+	// TUN enables the core's TUN interface. Opening the device needs
+	// administrator rights; without them the core exits at startup.
+	TUN bool `json:"tun"`
 }
 
 // DefaultConfig returns the settings used on first launch.
@@ -113,6 +116,10 @@ func (c Config) WriteYAML(dir string) (string, error) {
 	b.WriteString("log-level: info\n")
 	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
 		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
+	if c.TUN {
+		b.WriteString("tun:\n  enable: true\n  stack: system\n  device: utun-clash\n" +
+			"  strict-route: false\n  dns-hijack:\n    - any:53\n")
+	}
 
 	switch {
 	case c.ConfigPath != "":

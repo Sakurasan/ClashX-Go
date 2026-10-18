@@ -26,9 +26,12 @@ type trayMenu struct {
 	coreItem   *mygo.MenuItem
 	coreRun    bool
 	sysProxy   *mygo.MenuItem
+	tunItem    *mygo.MenuItem
 	loginItem  *mygo.MenuItem
 	speedItem  *mygo.MenuItem
 	lanItem    *mygo.MenuItem
+	subInfo    string
+	subInfoIt  *mygo.MenuItem
 	groups     []*groupEntry
 	groupSig   string
 	speedTitle string
@@ -83,15 +86,16 @@ func (m *trayMenu) build(s core.State) {
 		Accelerator: "Cmd+S",
 	}
 	m.sysProxy.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setSystemProxyToggle(it) }
-	tun := &mygo.MenuItem{
+	m.tunItem = &mygo.MenuItem{
 		Label:       "Tun 模式",
 		Type:        mygo.MenuItemCheckbox,
-		Disabled:    true,
+		Checked:     st.tun,
 		Accelerator: "Cmd+E",
-		ToolTip:     "需要管理员权限，暂未实现",
+		ToolTip:     "打开 utun 设备需要管理员权限（用 sudo 启动本应用）",
 	}
+	m.tunItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setTUNToggle(it) }
 	copyCmd := &mygo.MenuItem{Label: "复制终端代理命令", Accelerator: "Cmd+C", Click: func(*mygo.MenuItem, *mygo.Window) { a.copyProxyCommand() }}
-	items = append(items, m.sysProxy, tun, copyCmd, mygo.Separator())
+	items = append(items, m.sysProxy, m.tunItem, copyCmd, mygo.Separator())
 
 	m.loginItem = &mygo.MenuItem{
 		Label:   "开机启动",
@@ -121,13 +125,14 @@ func (m *trayMenu) build(s core.State) {
 	console := &mygo.MenuItem{Label: "控制台", Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabOverview) }}
 	items = append(items, testAll, console, mygo.Separator())
 
-	config := &mygo.MenuItem{Label: "配置", Submenu: []*mygo.MenuItem{
-		{Label: "更新订阅", Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
-		{Label: "托管配置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabSettings) }},
-		{Label: "本地配置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.chooseLocalConfig() }},
+	m.subInfoIt = &mygo.MenuItem{Label: subInfoLabel(s), Disabled: true}
+	config := &mygo.MenuItem{Label: "配置", Submenu: append([]*mygo.MenuItem{m.subInfoIt, mygo.Separator()},
+		&mygo.MenuItem{Label: "更新订阅", Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
+		&mygo.MenuItem{Label: "托管配置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabSettings) }},
+		&mygo.MenuItem{Label: "本地配置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.chooseLocalConfig() }},
 		mygo.Separator(),
-		{Label: "打开配置文件夹", Click: func(*mygo.MenuItem, *mygo.Window) { _ = mygo.Shell.OpenPath(coreDir()) }},
-	}}
+		&mygo.MenuItem{Label: "打开配置文件夹", Click: func(*mygo.MenuItem, *mygo.Window) { _ = mygo.Shell.OpenPath(coreDir()) }},
+	)}
 	more := &mygo.MenuItem{Label: "更多设置", Submenu: []*mygo.MenuItem{
 		{Label: "偏好设置…", Accelerator: "Cmd+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabSettings) }},
 	}}
@@ -139,6 +144,7 @@ func (m *trayMenu) build(s core.State) {
 
 	m.menu = mygo.NewMenu(items)
 	m.groupSig = groupsSignature(s.Groups)
+	m.subInfo = subInfoLabel(s)
 	m.setSpeedTitle(s)
 }
 
@@ -188,6 +194,7 @@ func (m *trayMenu) refresh(s core.State) {
 	if s.Running != m.coreRun {
 		m.coreRun = s.Running
 		m.coreItem.SetLabel(want)
+		a.updateTrayIcon(s.Running)
 	}
 	for _, g := range s.Groups {
 		ge := m.findGroup(g.Name)
@@ -207,6 +214,10 @@ func (m *trayMenu) refresh(s core.State) {
 				it.SetLabel(want)
 			}
 		}
+	}
+	if want := subInfoLabel(s); want != m.subInfo {
+		m.subInfo = want
+		m.subInfoIt.SetLabel(want)
 	}
 	m.setSpeedTitle(s)
 }
@@ -244,7 +255,7 @@ func (a *app) setMode(mode string) {
 
 func (a *app) toggleCore() {
 	if a.ctrl.State().Running {
-		a.stopCore()
+		go a.stopCore()
 	} else {
 		go a.startCore()
 	}
@@ -286,6 +297,29 @@ func (a *app) setLANToggle(it *mygo.MenuItem) {
 	}()
 }
 
+// setTUNToggle persists the Tun switch and restarts the core with (or
+// without) the tun block. Opening the utun device needs administrator
+// rights, so a plain launch fails fast and the switch rolls back.
+func (a *app) setTUNToggle(it *mygo.MenuItem) {
+	on := it.IsChecked()
+	a.settings.tun = on
+	saveSettings(coreDir(), a.settings)
+	go func() {
+		err := a.restartCore(a.settingsConfig())
+		if err == nil {
+			return
+		}
+		a.settings.tun = !on
+		saveSettings(coreDir(), a.settings)
+		a.menu.tunItem.SetChecked(!on)
+		msg := err.Error()
+		if on && strings.Contains(strings.ToLower(msg), "permitted") {
+			msg += "\nTUN 需要管理员权限：用 sudo 启动 ClashX Go 后再试。"
+		}
+		a.showToast("Tun 模式", msg)
+	}()
+}
+
 func (a *app) copyProxyCommand() {
 	port := a.mixedPort()
 	cmd := fmt.Sprintf("export http_proxy=http://127.0.0.1:%d\nexport https_proxy=http://127.0.0.1:%d\nexport all_proxy=socks5://127.0.0.1:%d", port, port, port)
@@ -317,6 +351,11 @@ func (a *app) selectProxy(group, member string) {
 }
 
 func (a *app) updateSubscription() {
+	if a.settings.subscriptionURL == "" {
+		a.showToast("未配置订阅", "请先在偏好设置里填写订阅地址。")
+		a.showPanel(tabSettings)
+		return
+	}
 	go func() {
 		n, err := a.ctrl.RefreshSubscription(context.Background())
 		if err != nil {
@@ -388,6 +427,24 @@ func memberLabel(name string, delays map[string]int) string {
 	default:
 		return fmt.Sprintf("%s  ·  %d ms", name, d)
 	}
+}
+
+// subInfoLabel renders the subscription quota line shown (disabled) at the
+// top of the 配置 submenu, ClashX style.
+func subInfoLabel(s core.State) string {
+	info := s.SubInfo
+	if info == nil || info.Total <= 0 {
+		if s.SubProxies > 0 {
+			return fmt.Sprintf("订阅：%d 个节点", s.SubProxies)
+		}
+		return "订阅：无"
+	}
+	line := fmt.Sprintf("订阅流量 %s / %s · %d 个节点",
+		humanBytes(info.Upload+info.Download), humanBytes(info.Total), s.SubProxies)
+	if !info.Expire.IsZero() {
+		line += " · 到期 " + info.Expire.Local().Format("2006-01-02")
+	}
+	return line
 }
 
 // groupsSignature identifies the menu structure: group names and members.

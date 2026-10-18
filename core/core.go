@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -33,6 +36,7 @@ type Manager struct {
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
+	exitCh  chan error // receives cmd.Wait() once the process is up
 	procPID int
 	running bool
 }
@@ -193,6 +197,14 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 		m.mu.Unlock()
 		return "", fmt.Errorf("core is already running")
 	}
+	m.killStale()
+	// The controller port is ours to bind (we pass -ext-ctl). If another
+	// Clash core already owns it, mihomo would start half-dead and our
+	// ping would answer from the foreign core: fail early instead.
+	if cfg.ControllerPort > 0 && !portAvailable(cfg.ControllerPort) {
+		m.mu.Unlock()
+		return "", fmt.Errorf("端口 %d 已被占用（可能另有 Clash 核心在运行），请在偏好设置里换一个控制器端口", cfg.ControllerPort)
+	}
 	bin := m.Binary()
 	if _, err := os.Stat(bin); err != nil {
 		m.mu.Unlock()
@@ -229,9 +241,15 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	m.cmd = cmd
 	m.procPID = cmd.Process.Pid
 	m.running = true
+	exited := make(chan error, 1)
+	m.exitCh = exited
 	m.mu.Unlock()
+	_ = os.WriteFile(m.pidPath(), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
 
-	// Wait for the controller to answer.
+	// Watch for process exit so a core that dies during startup — e.g. TUN
+	// cannot open a device without administrator rights — fails fast with
+	// the log tail instead of timing out.
+	go func() { exited <- cmd.Wait() }()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if ping() == nil {
@@ -241,11 +259,31 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 		case <-ctx.Done():
 			m.Stop()
 			return "", ctx.Err()
+		case <-exited:
+			// Leave the buffered error for Stop to consume.
+			m.Stop()
+			return "", fmt.Errorf("核心进程提前退出%s", coreLogTail(filepath.Join(m.dir, "core.log")))
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
 	m.Stop()
 	return "", fmt.Errorf("core did not answer on the controller within 15s")
+}
+
+// coreLogTail quotes the last lines of the core log for startup errors.
+func coreLogTail(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	const max = 400
+	if len(data) > max {
+		data = data[len(data)-max:]
+		if i := strings.IndexByte(string(data), '\n'); i >= 0 && i < len(data)-1 {
+			data = data[i+1:]
+		}
+	}
+	return "\n" + strings.TrimSpace(string(data))
 }
 
 // Stop terminates the mihomo process, waiting for it to exit.
@@ -255,21 +293,62 @@ func (m *Manager) Stop() {
 	if !m.running || m.cmd == nil || m.cmd.Process == nil {
 		return
 	}
-	// Send SIGTERM first, then SIGKILL after a grace period.
+	// Send SIGTERM first, then SIGKILL after a grace period. The startup
+	// watcher goroutine delivers the real exit to exitCh; Stop must not
+	// call cmd.Wait itself.
+	exit := m.exitCh
 	_ = m.cmd.Process.Signal(os.Interrupt)
-	done := make(chan struct{})
-	go func() {
-		_ = m.cmd.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		_ = m.cmd.Process.Kill()
-		<-done
+	if exit != nil {
+		select {
+		case <-exit:
+		case <-time.After(5 * time.Second):
+			_ = m.cmd.Process.Kill()
+			<-exit
+		}
 	}
 	m.running = false
 	m.cmd = nil
+	m.exitCh = nil
+	os.Remove(m.pidPath())
+}
+
+// pidPath is where the core's process id is stored so a later run can clean
+// up a core orphaned by a killed app (SIGKILL skips OnWillQuit).
+func (m *Manager) pidPath() string { return filepath.Join(m.dir, "core.pid") }
+
+// portAvailable reports whether a TCP port can be bound on localhost.
+func portAvailable(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+// killStale terminates a core left over from a previous run.
+func (m *Manager) killStale() {
+	data, err := os.ReadFile(m.pidPath())
+	os.Remove(m.pidPath())
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil || proc.Signal(syscall.Signal(0)) != nil {
+		return
+	}
+	_ = proc.Signal(os.Interrupt)
+	for range 25 {
+		time.Sleep(200 * time.Millisecond)
+		if proc.Signal(syscall.Signal(0)) != nil {
+			return
+		}
+	}
+	_ = proc.Kill()
 }
 
 // Running reports whether the process is currently up.

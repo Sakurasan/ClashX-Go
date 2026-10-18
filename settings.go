@@ -36,6 +36,7 @@ type settings struct {
 	systemProxy     bool
 	allowLAN        bool
 	showTraffic     bool
+	tun             bool
 }
 
 // settingsJSON is the wire form of settings. It exists because the in-memory
@@ -51,6 +52,7 @@ type settingsJSON struct {
 	SystemProxy     bool   `json:"systemProxy"`
 	AllowLAN        bool   `json:"allowLAN"`
 	ShowTraffic     *bool  `json:"showTraffic,omitempty"`
+	TUN             bool   `json:"tun"`
 }
 
 // loadSettings reads persisted settings from the app config dir.
@@ -76,6 +78,7 @@ func loadSettings(dir string) *settings {
 	s.startAtLogin = w.StartAtLogin
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
+	s.tun = w.TUN
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
 	}
@@ -93,6 +96,7 @@ func saveSettings(dir string, s *settings) {
 		StartAtLogin:    s.startAtLogin,
 		SystemProxy:     s.systemProxy,
 		AllowLAN:        s.allowLAN,
+		TUN:             s.tun,
 		ShowTraffic:     &s.showTraffic,
 	}
 	data, err := json.MarshalIndent(w, "", "  ")
