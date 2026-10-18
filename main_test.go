@@ -75,7 +75,7 @@ func TestTrayMenu(t *testing.T) {
 	if !ge.members["HK"].IsChecked() || ge.members["US"].IsChecked() {
 		t.Error("initial member checks wrong")
 	}
-	if got := ge.members["US"].Label; got != "US  🔴 失败" {
+	if got := ge.members["US"].Label; got != "US  ❌  失败" {
 		t.Errorf("timeout member label = %q", got)
 	}
 
@@ -90,7 +90,7 @@ func TestTrayMenu(t *testing.T) {
 	if !ge.members["US"].IsChecked() || ge.members["HK"].IsChecked() {
 		t.Error("member checks not refreshed")
 	}
-	if got := ge.members["US"].Label; got != "US  🟢 210 ms" {
+	if got := ge.members["US"].Label; got != "US  ✅  210 ms" {
 		t.Errorf("delay label = %q", got)
 	}
 	if got := ge.item.Label; got != "PROXY  (US)" {

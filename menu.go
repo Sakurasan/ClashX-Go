@@ -535,20 +535,20 @@ func groupLabel(name, current string) string {
 	return name + "  (" + current + ")"
 }
 
-// memberLabel renders a node with a ClashX-style coloured delay badge.
-// Native menus cannot draw the coloured pill, so a coloured circle stands
-// in: green ≤300ms, orange slower, red for failures.
+// memberLabel renders a node with a ClashX-style delay badge. Native menus
+// cannot draw the coloured pill, so small text-grade symbols stand in:
+// ✅ ≤300ms, ⚠️ slower, ❌ for failures.
 func memberLabel(name string, delays map[string]int) string {
 	d, ok := delays[name]
 	switch {
 	case !ok || d == 0:
 		return name
 	case d < 0:
-		return name + "  🔴 失败"
+		return name + "  ❌  失败"
 	case d <= 300:
-		return fmt.Sprintf("%s  🟢 %d ms", name, d)
+		return fmt.Sprintf("%s  ✅ %4d ms", name, d)
 	default:
-		return fmt.Sprintf("%s  🟠 %d ms", name, d)
+		return fmt.Sprintf("%s  ⚠️ %4d ms", name, d)
 	}
 }
 
@@ -582,15 +582,20 @@ func groupsSignature(groups []*core.GroupView) string {
 	return b.String()
 }
 
+// humanSpeed renders traffic as a fixed 8-column field so the menu bar
+// title keeps a constant width and does not jitter as values change.
 func humanSpeed(n int64) string {
 	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B/s", n)
+	var s string
+	switch {
+	case n < unit:
+		s = fmt.Sprintf("%d B/s", n)
+	case n < unit*unit:
+		s = fmt.Sprintf("%.1f K/s", float64(n)/unit)
+	case n < unit*unit*unit:
+		s = fmt.Sprintf("%.1f M/s", float64(n)/unit/unit)
+	default:
+		s = fmt.Sprintf("%.1f G/s", float64(n)/unit/unit/unit)
 	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB/s", float64(n)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%8s", s)
 }

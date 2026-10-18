@@ -207,7 +207,7 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	// ping would answer from the foreign core: fail early instead. A core
 	// we just stopped drains its connections before exiting, so allow a
 	// generous window for the port to come free.
-	if cfg.ControllerPort > 0 && !waitPortFree(cfg.ControllerPort, 12*time.Second) {
+	if cfg.ControllerPort > 0 && !waitPortFree(cfg.ControllerPort, 20*time.Second) {
 		m.mu.Unlock()
 		return "", fmt.Errorf("端口 %d 已被占用（可能另有 Clash 核心在运行），请在偏好设置里换一个控制器端口", cfg.ControllerPort)
 	}
@@ -443,11 +443,11 @@ func (m *Manager) Stop() {
 	if exit != nil {
 		select {
 		case <-exit:
-		case <-time.After(3 * time.Second):
-			// Graceful drain can take minutes with busy keep-alives; a
-			// toggle restart should not wait for it. SIGKILL is reaped by
-			// the Wait goroutine, and Start's port wait absorbs the socket
-			// teardown.
+		case <-time.After(1 * time.Second):
+			// Graceful drain can hang for tens of seconds with busy
+			// keep-alives and TUN teardown; a restart must not wait for it.
+			// SIGKILL is reaped by the Wait goroutine, and Start's port
+			// wait absorbs the kernel-side socket release.
 			if m.cmd != nil && m.cmd.Process != nil {
 				_ = m.cmd.Process.Kill()
 			}
