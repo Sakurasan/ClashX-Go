@@ -12,23 +12,17 @@ import (
 // the view. Fields are plain so a view can read them without locking.
 type State struct {
 	Running  bool
-	Version  string
 	Mode     string
 	Selected map[string]string // group name -> chosen member
 	Groups   []*GroupView
 	Traffic  Traffic
-	Memory   int64  // bytes in use
 	Level    string // core log-level, refreshed by the poll loop
-	CorePath string
-	Log      []string
 
 	// Subscription status, refreshed with the poll loop. SubProxies is the
 	// node count of the downloaded subscription (0 when none). SubInfo is
 	// the provider's quota header, nil when it sent none.
-	SubProxies     int
-	SubUpdated     time.Time
-	SubDownloading bool
-	SubInfo        *SubscriptionInfo
+	SubProxies int
+	SubInfo    *SubscriptionInfo
 }
 
 // GroupView is the UI-ready form of a policy group.
@@ -75,11 +69,14 @@ func NewController(mgr *Manager, cfg Config) *Controller {
 		mgr:    mgr,
 		cfg:    cfg,
 		client: NewClient(cfg.ControllerPort, cfg.Secret),
+		// Initialised up front: SelectProxy's delay probe may run before
+		// the first group test (e.g. remembered selections replayed at
+		// startup) and must not assign into a nil map.
+		delays: map[string]map[string]int{},
 		state: State{
 			Mode:     cfg.Mode,
 			Selected: map[string]string{},
 			Groups:   []*GroupView{},
-			CorePath: mgr.Binary(),
 		},
 	}
 	return c
@@ -90,9 +87,6 @@ func (c *Controller) Client() *Client { return c.client }
 
 // Manager exposes the underlying manager.
 func (c *Controller) Manager() *Manager { return c.mgr }
-
-// Config returns the configuration the controller was built with.
-func (c *Controller) Config() Config { return c.cfg }
 
 // OnChange registers the callback run (on the main thread) when state
 // changes. Only one callback is used.
@@ -130,9 +124,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	}
 	c.setState(func(s *State) {
 		s.Running = true
-		s.Version = c.mgr.Version()
 		s.SubProxies = c.mgr.SubscriptionProxyCount(c.cfg.subFile())
-		s.SubUpdated = c.mgr.SubscriptionUpdatedAt(c.cfg.subFile())
 		s.SubInfo = c.mgr.SubscriptionInfo(c.cfg.subFile())
 	})
 	c.beginLoops(ctx)
@@ -181,11 +173,9 @@ func (c *Controller) pollLoop(ctx context.Context) {
 		}
 		subCheckedAt = time.Now()
 		n := c.mgr.SubscriptionProxyCount(c.cfg.subFile())
-		at := c.mgr.SubscriptionUpdatedAt(c.cfg.subFile())
 		info := c.mgr.SubscriptionInfo(c.cfg.subFile())
 		c.setState(func(s *State) {
 			s.SubProxies = n
-			s.SubUpdated = at
 			s.SubInfo = info
 		})
 	}
@@ -193,7 +183,7 @@ func (c *Controller) pollLoop(ctx context.Context) {
 	noteFailure := func() {
 		// The API can blip during a core reload; only a sustained failure
 		// means the process died behind our back (e.g. a second app
-		// instance's cleanup). Then the menu must show 启动核心 again.
+		// instance's cleanup). Then the menu must show the stopped state.
 		fails++
 		if fails == 3 {
 			c.setState(func(s *State) { s.Running = false })
@@ -255,7 +245,7 @@ func (c *Controller) SelectProxy(ctx context.Context, group, member string) erro
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		d, err := c.client.TestProxyDelay(ctx, member)
+		d, err := c.client.TestProxyDelay(ctx, member, c.cfg.BenchmarkURL)
 		if err != nil {
 			d = -1
 		}
@@ -352,7 +342,7 @@ func (c *Controller) TestGroup(ctx context.Context, group string) error {
 	if len(members) == 0 {
 		return nil
 	}
-	delays := c.client.TestGroupDelay(ctx, members)
+	delays := c.client.TestGroupDelay(ctx, members, c.cfg.BenchmarkURL)
 	c.setState(func(s *State) {
 		if c.delays == nil {
 			c.delays = map[string]map[string]int{}
@@ -415,16 +405,13 @@ func (c *Controller) CloseConnections(ctx context.Context) error {
 // running, reloads providers so the new nodes take effect immediately. It
 // returns the number of proxies in the freshly downloaded file.
 func (c *Controller) RefreshSubscription(ctx context.Context) (int, string, error) {
-	c.SetSubDownloading(true)
 	n, title, err := c.mgr.RefreshSubscription(ctx, c.cfg)
-	c.setState(func(s *State) {
-		s.SubDownloading = false
-		if err == nil {
+	if err == nil {
+		c.setState(func(s *State) {
 			s.SubProxies = n
-			s.SubUpdated = time.Now()
 			s.SubInfo = c.mgr.SubscriptionInfo(c.cfg.subFile())
-		}
-	})
+		})
+	}
 	if err != nil {
 		return 0, "", err
 	}
@@ -434,11 +421,6 @@ func (c *Controller) RefreshSubscription(ctx context.Context) (int, string, erro
 		_ = c.client.ReloadProvider(ctx, "provider")
 	}
 	return n, title, nil
-}
-
-// SetSubDownloading marks the state while a subscription download runs.
-func (c *Controller) SetSubDownloading(on bool) {
-	c.setState(func(s *State) { s.SubDownloading = on })
 }
 
 // applyProxies turns a /proxies snapshot into state: groups are ordered by

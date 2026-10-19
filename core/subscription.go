@@ -46,16 +46,6 @@ func (m *Manager) SubscriptionProxyCount(file string) int {
 	return countProxies(data)
 }
 
-// SubscriptionUpdatedAt returns the modification time of the stored
-// subscription, or the zero time.
-func (m *Manager) SubscriptionUpdatedAt(file string) time.Time {
-	fi, err := os.Stat(m.subscriptionPath(file))
-	if err != nil {
-		return time.Time{}
-	}
-	return fi.ModTime()
-}
-
 // SubscriptionStale reports whether the stored subscription is missing or
 // older than maxAge, i.e. whether a Start will have to download it before
 // the core can boot.

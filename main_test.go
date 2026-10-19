@@ -27,28 +27,15 @@ func testApp(t *testing.T) *app {
 	return a
 }
 
-func TestPanelOverview(t *testing.T) {
-	a := testApp(t)
-	p := &panelApp{app: a}
-	tt := ui.NewTester(p.view, 420, 560)
-	if !tt.HasText("ClashX Go") {
-		t.Errorf("title not rendered, texts %q", tt.Texts())
-	}
-	if !tt.HasText("核心已停止") {
-		t.Errorf("stopped hint not rendered, texts %q", tt.Texts())
-	}
-	if !tt.HasText("启动核心") {
-		t.Errorf("start button not rendered, texts %q", tt.Texts())
-	}
-}
-
-// TestPanelSettings exercises the Settings tab, which renders without the
+// TestPanelSettings exercises the settings window, which renders without the
 // core running and needs no controller endpoints to build.
 func TestPanelSettings(t *testing.T) {
 	a := testApp(t)
 	p := &panelApp{app: a}
-	p.tab = tabSettings
-	tt := ui.NewTester(p.view, 420, 560)
+	tt := ui.NewTester(p.view, 420, 700)
+	if !tt.HasText("ClashX 设置") {
+		t.Errorf("settings title not rendered, texts %q", tt.Texts())
+	}
 	if !tt.HasText("核心端点") {
 		t.Errorf("settings header not rendered, texts %q", tt.Texts())
 	}
@@ -57,6 +44,14 @@ func TestPanelSettings(t *testing.T) {
 	}
 	if !tt.HasText("保存并重启核心") {
 		t.Errorf("save button missing, texts %q", tt.Texts())
+	}
+	for _, want := range []string{"启用 IPv6", "代理延迟测试地址", "特定 WiFi 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "重置"} {
+		if !tt.HasText(want) {
+			t.Errorf("meta general setting %q missing, texts %q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("概览") || tt.HasText("暂无策略组。") {
+		t.Errorf("legacy panel panes still rendered, texts %q", tt.Texts())
 	}
 }
 
@@ -97,6 +92,15 @@ func TestTrayMenu(t *testing.T) {
 	}
 	if got := ge.item.Label; got != "PROXY  (US)" {
 		t.Errorf("group label = %q", got)
+	}
+}
+
+func TestAboutView(t *testing.T) {
+	tt := ui.NewTester(aboutView, 420, 420)
+	for _, want := range []string{"ClashX Go", "版本: 0.1.0", "Meta Core: " + core.CoreVersion, "GitHub for Clash Meta"} {
+		if !tt.HasText(want) {
+			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
+		}
 	}
 }
 

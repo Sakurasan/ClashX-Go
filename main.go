@@ -31,16 +31,15 @@ type app struct {
 	subDlg   *subscriptionDialog
 	manage   *manageWindow
 	win      *mygo.Window
+	aboutWin *mygo.Window
 	tray     *mygo.Tray
 	quitting bool
 
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
-	// against a still-finishing operation. userStopped marks an explicit
-	// user stop that the auto-retry loop must respect. reloadMu serialises
-	// background live reloads (a new switch waits for the previous one).
-	coreOp      sync.Mutex
-	userStopped bool
-	reloadMu    sync.Mutex
+	// against a still-finishing operation. reloadMu serialises background
+	// live reloads (a new switch waits for the previous one).
+	coreOp   sync.Mutex
+	reloadMu sync.Mutex
 }
 
 func main() {
@@ -74,8 +73,8 @@ func (a *app) ready() {
 	a.ctrl = core.NewController(mgr, cfg)
 	a.ctrl.OnChange(a.onState)
 
-	// Tray: clicking opens the ClashX-style menu; the panel window stays
-	// as the preferences window behind 更多设置.
+	// Tray: clicking opens the ClashX-style menu; the window behind
+	// 更多设置 is the preferences window.
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(color.NRGBA{A: 255}),
 		IconIsTemplate: true,
@@ -99,9 +98,9 @@ func (a *app) ready() {
 	}
 	a.panel = &panelApp{app: a}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title:             "ClashX Go",
+		Title:             "ClashX 设置",
 		Width:             420,
-		Height:            560,
+		Height:            700,
 		Hidden:            true,
 		Frameless:         true,
 		DisableResize:     true,
@@ -136,6 +135,85 @@ func (a *app) ready() {
 	go a.startCore()
 	go a.autoUpdateLoop(context.Background())
 	go a.watchConfigSource()
+	go a.ssidSuspendLoop()
+}
+
+// ssidSuspendLoop pauses the system proxy and TUN while the default route is
+// Wi-Fi whose SSID is in the user's suspend list, then restores on leave
+// (ClashX Meta's SSID 自动暂停).
+func (a *app) ssidSuspendLoop() {
+	var suspended, prevSys bool
+	for {
+		time.Sleep(15 * time.Second)
+		if a.quitting {
+			return
+		}
+		list := splitList(a.settings.suspendSSIDs)
+		if len(list) == 0 {
+			if suspended {
+				a.resumeFromSSID(prevSys)
+				suspended = false
+			}
+			continue
+		}
+		ssid := currentSSID()
+		hit := false
+		for _, want := range list {
+			if want == ssid {
+				hit = true
+				break
+			}
+		}
+		switch {
+		case hit && !suspended:
+			suspended = true
+			prevSys = a.settings.systemProxy
+			log.Printf("WiFi %q 命中暂停列表，暂停代理", ssid)
+			a.suspendProxies()
+		case !hit && suspended:
+			suspended = false
+			log.Printf("WiFi %q 已离开，恢复代理", ssid)
+			a.resumeFromSSID(prevSys)
+		}
+	}
+}
+
+// suspendProxies turns off the system proxy (restoring the user's own
+// config) and TUN without touching the saved intentions.
+func (a *app) suspendProxies() {
+	if a.settings.systemProxy {
+		_ = restoreProxy(a.settings.proxyBackup)
+		a.settings.systemProxy = false
+		a.settings.proxyBackup = nil
+		saveSettings(coreDir(), a.settings)
+		a.refreshTrayIcon()
+	}
+	if a.ctrl.State().Running {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = a.ctrl.SetTUN(ctx, false)
+		cancel()
+	}
+}
+
+// resumeFromSSID re-applies the system proxy (and TUN) that were suspended.
+func (a *app) resumeFromSSID(prevSys bool) {
+	if prevSys {
+		if a.settings.proxyBackup == nil {
+			if b, err := snapshotProxy(); err == nil {
+				a.settings.proxyBackup = b
+			}
+		}
+		if err := pointProxyAt(a.mixedPort(), splitList(a.settings.proxyBypass)); err == nil {
+			a.settings.systemProxy = true
+			saveSettings(coreDir(), a.settings)
+		}
+	}
+	if a.settings.tun && a.ctrl.State().Running {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = a.ctrl.SetTUN(ctx, true)
+		cancel()
+	}
+	a.refreshTrayIcon()
 }
 
 // onState marshals onto the main thread with an async post (never a
@@ -169,7 +247,7 @@ func (a *app) startCoreReport(report bool) {
 		return
 	}
 	time.AfterFunc(30*time.Second, func() {
-		if a.quitting || a.userStopped || a.ctrl.State().Running {
+		if a.quitting || a.ctrl.State().Running {
 			return
 		}
 		a.startCoreReport(false)
@@ -182,21 +260,14 @@ func (a *app) startCoreReport(report bool) {
 func (a *app) startCoreLocked() error {
 	a.coreOp.Lock()
 	defer a.coreOp.Unlock()
-	a.userStopped = false
 	if a.ctrl.Manager().Running() {
 		// A quick 停止→启动 or double click: the previous op already won
 		// the race, and Manager.Start would only error "already running".
 		return nil
 	}
-	// Re-read settings so a fresh Start (e.g. from the panel footer)
-	// uses the current endpoints.
+	// Re-read settings so a fresh Start uses the current endpoints.
 	a.ctrl = core.NewController(a.ctrl.Manager(), a.settingsConfig())
 	a.ctrl.OnChange(a.onState)
-	// Flag the first subscription download (Start pulls it before booting
-	// the core) so the UI can show it and avoid double starts.
-	if a.settingsConfig().SubscriptionURL != "" {
-		a.ctrl.SetSubDownloading(true)
-	}
 	err := a.ctrl.Start(context.Background())
 	if err != nil && !core.PortAvailable(a.apiPort()) {
 		// ClashX Meta shifts to the next free port instead of refusing to
@@ -211,7 +282,6 @@ func (a *app) startCoreLocked() error {
 			err = a.ctrl.Start(context.Background())
 		}
 	}
-	a.ctrl.SetSubDownloading(false)
 	if err == nil {
 		go a.postStartConfig()
 	}
@@ -328,15 +398,6 @@ func (a *app) watchConfigSource() {
 	}
 }
 
-// stopCore is the user's explicit stop (panel footer); it cancels the
-// auto-retry loop so the core stays down.
-func (a *app) stopCore() {
-	a.coreOp.Lock()
-	defer a.coreOp.Unlock()
-	a.userStopped = true
-	a.ctrl.Stop()
-}
-
 // applyConfig switches configuration live: mihomo re-reads the config file
 // in place (the ClashX-instant path, the port never opens). Only changes a
 // running core cannot absorb (API port/secret) or a failed reload fall
@@ -364,7 +425,7 @@ func (a *app) reloadLive(cfg core.Config) {
 	err := a.ctrl.ReloadConfig(ctx, cfg)
 	cancel()
 	if err != nil {
-		if a.quitting || a.userStopped || !a.ctrl.Manager().Running() {
+		if a.quitting || !a.ctrl.Manager().Running() {
 			return
 		}
 		log.Printf("live reload failed, restarting core: %v", err)
@@ -395,7 +456,7 @@ func (a *app) restartCore(cfg core.Config) error {
 		// retry also fails.
 		go func() {
 			time.Sleep(300 * time.Millisecond)
-			if a.quitting || a.userStopped || a.ctrl.Manager().Running() {
+			if a.quitting || a.ctrl.Manager().Running() {
 				return
 			}
 			a.startCoreReport(true)
@@ -416,6 +477,8 @@ func (a *app) settingsConfig() core.Config {
 		cfg.Secret = s.secret
 		cfg.AllowLAN = s.allowLAN
 		cfg.TUN = s.tun
+		cfg.IPv6 = s.ipv6
+		cfg.BenchmarkURL = s.benchmarkURL
 		if p := a.activeSub(); p != nil {
 			cfg.SubscriptionURL = p.URL
 			cfg.SubscriptionFile = p.File
@@ -426,17 +489,20 @@ func (a *app) settingsConfig() core.Config {
 	return cfg
 }
 
-// showToast asks the panel to show a toast on its next frame.
+// showToast asks the panel to show a toast on its next frame. The "减少通知"
+// setting suppresses these, but never error dialogs.
 func (a *app) showToast(title, desc string) {
+	if a.settings != nil && a.settings.noNotify {
+		return
+	}
 	if a.panel != nil {
 		a.panel.toast = &toastMsg{title: title, desc: desc}
 		a.win.Update(func() {})
 	}
 }
 
-// showPanel opens the preferences window on the given tab.
-func (a *app) showPanel(tab panelTab) {
-	a.panel.tab = tab
+// showSettings opens the settings window next to the tray icon.
+func (a *app) showSettings() {
 	a.show()
 }
 

@@ -42,8 +42,6 @@ type trayMenu struct {
 	httpIt     *mygo.MenuItem
 	apiIt      *mygo.MenuItem
 	ipIt       *mygo.MenuItem
-	httpText   string
-	apiText    string
 	groups     []*groupEntry
 	groupSig   string
 	speedTitle string
@@ -140,7 +138,7 @@ func (m *trayMenu) build(s core.State) {
 	m.subInfoIt = &mygo.MenuItem{Label: subInfoLabel(s), Disabled: true}
 	config := &mygo.MenuItem{Label: "配置", Submenu: m.configSubmenu()}
 	more := &mygo.MenuItem{Label: "更多设置", Submenu: []*mygo.MenuItem{
-		{Label: "偏好设置…", Accelerator: "Cmd+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabSettings) }},
+		{Label: "偏好设置…", Accelerator: "Cmd+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.showSettings() }},
 	}}
 	meta := &mygo.MenuItem{Label: "Meta", Submenu: []*mygo.MenuItem{
 		{Label: "重载核心配置", Click: func(*mygo.MenuItem, *mygo.Window) { a.reloadCore() }},
@@ -301,7 +299,7 @@ func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 					a.settings.proxyBackup = b
 				}
 			}
-			if err := pointProxyAt(a.mixedPort()); err != nil {
+			if err := pointProxyAt(a.mixedPort(), splitList(a.settings.proxyBypass)); err != nil {
 				a.settings.systemProxy = false
 				saveSettings(coreDir(), a.settings)
 				a.menu.sysProxy.SetChecked(false)
@@ -512,11 +510,7 @@ func (m *trayMenu) helpSubmenu(s core.State) *mygo.MenuItem {
 	m.ipIt = &mygo.MenuItem{Label: "IP: " + localIP(), Disabled: true}
 	return &mygo.MenuItem{Label: "帮助", Submenu: []*mygo.MenuItem{
 		{Label: "关于…", Click: func(*mygo.MenuItem, *mygo.Window) {
-			mygo.Dialog.Message(mygo.MessageOptions{
-				Type: mygo.MessageInfo, Title: "ClashX Go",
-				Message: "ClashX Go 0.1.0",
-				Detail:  "mihomo 核心 " + s.Version + " · 复刻 ClashX 的菜单栏代理",
-			})
+			a.showAbout()
 		}},
 		mygo.Separator(),
 		{Label: "日志等级", Submenu: levelSub},
@@ -533,27 +527,6 @@ func portLabel(name string, port int, running bool) string {
 		return name + ": —"
 	}
 	return fmt.Sprintf("%s: %d", name, port)
-}
-
-// refreshHelpInfo syncs the 帮助 info lines with a new state.
-func (m *trayMenu) refreshHelpInfo(s core.State) {
-	if m.httpIt == nil {
-		return
-	}
-	if want := portLabel("HTTP/SOCKS 端口", m.app.mixedPort(), s.Running); want != m.httpText {
-		m.httpText = want
-		m.httpIt.SetLabel(want)
-	}
-	if want := portLabel("API 端口", m.app.apiPort(), s.Running); want != m.apiText {
-		m.apiText = want
-		m.apiIt.SetLabel(want)
-	}
-	if !s.Running && s.Level != m.level {
-		m.level = s.Level
-		for lv, it := range m.levelRadio {
-			it.SetChecked(strings.EqualFold(s.Level, lv))
-		}
-	}
 }
 
 // configSubmenu mirrors ClashX Meta's 配置 menu: the managed profiles list
@@ -675,7 +648,7 @@ func (a *app) openConsole() {
 		}
 	}
 	if !installed {
-		a.showPanel(tabOverview)
+		a.reportError("控制台", "仪表盘未安装：请运行 scripts/fetch-dashboard.sh 或把 ui/ 放入配置目录。")
 		return
 	}
 	if !a.ctrl.State().Running {

@@ -21,6 +21,8 @@ func snapshotProxy() (*systemProxyBackup, error) {
 	return nil, errors.New("系统代理仅支持 macOS")
 }
 
-func pointProxyAt(int) error { return errors.New("系统代理仅支持 macOS") }
+func pointProxyAt(int, []string) error { return errors.New("系统代理仅支持 macOS") }
 
 func restoreProxy(*systemProxyBackup) error { return errors.New("系统代理仅支持 macOS") }
+
+func currentSSID() string { return "" }

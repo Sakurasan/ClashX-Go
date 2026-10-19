@@ -50,10 +50,14 @@ func snapshotProxy() (*systemProxyBackup, error) {
 }
 
 // pointProxyAt routes the active service's HTTP/HTTPS proxy at the core.
-func pointProxyAt(port int) error {
+// A nil bypass list falls back to the built-in defaults.
+func pointProxyAt(port int, bypass []string) error {
 	svc, err := activeNetworkService()
 	if err != nil {
 		return err
+	}
+	if len(bypass) == 0 {
+		bypass = proxyBypassDomains
 	}
 	where := []string{"127.0.0.1", strconv.Itoa(port)}
 	for _, arg := range []string{"-setwebproxy", "-setsecurewebproxy"} {
@@ -61,10 +65,37 @@ func pointProxyAt(port int) error {
 			return errors.New(out)
 		}
 	}
-	if out, err := networksetup(append([]string{"-setproxybypassdomains", svc}, proxyBypassDomains...)...); err != nil {
+	if out, err := networksetup(append([]string{"-setproxybypassdomains", svc}, bypass...)...); err != nil {
 		return errors.New(out)
 	}
 	return nil
+}
+
+// currentSSID returns the Wi-Fi network the default route runs on, or ""
+// when the active interface is not associated Wi-Fi.
+func currentSSID() string {
+	out, err := exec.Command("route", "-n", "get", "default").Output()
+	if err != nil {
+		return ""
+	}
+	device := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "interface:"); ok {
+			device = strings.TrimSpace(rest)
+			break
+		}
+	}
+	if device == "" {
+		return ""
+	}
+	out, err = exec.Command("networksetup", "-getairportnetwork", device).Output()
+	if err != nil {
+		return ""
+	}
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "Current Wi-Fi Network:"); ok {
+		return strings.TrimSpace(rest)
+	}
+	return ""
 }
 
 // restoreProxy puts back a captured config; a nil backup just switches our

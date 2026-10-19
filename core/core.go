@@ -604,16 +604,6 @@ func (m *Manager) Running() bool {
 	return m.running
 }
 
-// PID returns the process id, or 0.
-func (m *Manager) PID() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.procPID
-}
-
-// Version returns the pinned core version.
-func (m *Manager) Version() string { return CoreVersion }
-
 // SubscriptionMaxAge is how long a downloaded subscription is reused
 // before Start fetches a fresh copy.
 const SubscriptionMaxAge = time.Hour
@@ -666,22 +656,3 @@ func (m *Manager) LogPath() string { return filepath.Join(m.dir, "core.log") }
 
 // ErrNotRunning is returned when an API call needs a live core.
 var ErrNotRunning = fmt.Errorf("core is not running")
-
-// ParseSubscription extracts server URIs (vmess://, vless://, trojan://,
-// ss://, ssr://, socks5://, hysteria2://, tuic://) from a subscription
-// text, one per line. It is used to offer a quick "use this subscription
-// URL" flow; the profile itself is downloaded by the core via proxy
-// providers, which is out of scope for this first version.
-func ParseSubscription(s string) []string {
-	var out []string
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
-		for _, prefix := range []string{"vmess://", "vless://", "trojan://", "ss://", "ssr://", "socks5://", "hysteria2://", "tuic://"} {
-			if strings.HasPrefix(line, prefix) {
-				out = append(out, line)
-				break
-			}
-		}
-	}
-	return out
-}

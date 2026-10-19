@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -40,6 +41,10 @@ type Config struct {
 	// TUN enables the core's TUN interface. Opening the device needs
 	// administrator rights; without them the core exits at startup.
 	TUN bool `json:"tun"`
+	// IPv6 enables IPv6 in the core runtime config.
+	IPv6 bool `json:"ipv6"`
+	// BenchmarkURL is the URL used for per-node latency tests.
+	BenchmarkURL string `json:"benchmark-url"`
 }
 
 // DefaultConfig returns the settings used on first launch.
@@ -50,11 +55,6 @@ func DefaultConfig() Config {
 		Mode:           "rule",
 	}
 }
-
-// ConfigError reports a requested profile that does not exist.
-type ConfigError struct{ Path string }
-
-func (e *ConfigError) Error() string { return "config file not found: " + e.Path }
 
 // subFile returns the subscription file name this config uses.
 func (c Config) subFile() string {
@@ -268,7 +268,7 @@ func (c Config) writeBase(b *strings.Builder) {
 	if c.ExternalUI != "" {
 		fmt.Fprintf(b, "external-ui: %s\n", c.ExternalUI)
 	}
-	b.WriteString("ipv6: false\n")
+	b.WriteString("ipv6: " + strconv.FormatBool(c.IPv6) + "\n")
 	b.WriteString("log-level: info\n")
 	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
 		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")

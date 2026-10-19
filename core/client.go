@@ -299,10 +299,16 @@ func (c *Client) Reload(ctx context.Context, path string) error {
 	return nil
 }
 
+// defaultTestURL is used when no benchmark URL is configured.
+const defaultTestURL = "http://www.gstatic.com/generate_204"
+
 // TestProxyDelay measures one proxy's latency in ms. mihomo answers 503
 // with {"message":"timeout"} for unreachable nodes, reported as -1.
-func (c *Client) TestProxyDelay(ctx context.Context, name string) (int, error) {
-	path := "/proxies/" + url.PathEscape(name) + "/delay?timeout=5000&url=http://www.gstatic.com/generate_204"
+func (c *Client) TestProxyDelay(ctx context.Context, name, testURL string) (int, error) {
+	if testURL == "" {
+		testURL = defaultTestURL
+	}
+	path := "/proxies/" + url.PathEscape(name) + "/delay?timeout=5000&url=" + url.QueryEscape(testURL)
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return -1, err
@@ -328,7 +334,7 @@ const groupTestConcurrency = 16
 // name→ms (-1 for unreachable). mihomo's legacy /group/{name}/delay only
 // answers for the group's current selection, so each node is tested via
 // its own endpoint, like ClashX does.
-func (c *Client) TestGroupDelay(ctx context.Context, members []string) map[string]int {
+func (c *Client) TestGroupDelay(ctx context.Context, members []string, testURL string) map[string]int {
 	out := make(map[string]int, len(members))
 	var mu sync.Mutex
 	sem := make(chan struct{}, groupTestConcurrency)
@@ -343,7 +349,7 @@ func (c *Client) TestGroupDelay(ctx context.Context, members []string) map[strin
 				return
 			}
 			defer func() { <-sem }()
-			d, err := c.TestProxyDelay(ctx, name)
+			d, err := c.TestProxyDelay(ctx, name, testURL)
 			if err != nil {
 				d = -1
 			}
@@ -394,66 +400,6 @@ func (c *Client) StreamTraffic(ctx context.Context, fn func(Traffic)) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-}
-
-// Connection is one row of /connections.
-type Connection struct {
-	ID       string `json:"id"`
-	Metadata struct {
-		Host        string `json:"host"`
-		SourceIP    string `json:"sourceIP"`
-		SourcePort  string `json:"sourcePort"`
-		DestIP      string `json:"destinationIP"`
-		DestPort    string `json:"destinationPort"`
-		Network     string `json:"network"`
-		Type        string `json:"type"`
-		Process     string `json:"process"`
-		ProcessPath string `json:"processPath"`
-	} `json:"metadata"`
-	Upload      int64     `json:"upload"`
-	Download    int64     `json:"download"`
-	Start       time.Time `json:"start"`
-	Chains      []string  `json:"chains"`
-	Rule        string    `json:"rule"`
-	RulePayload string    `json:"rulePayload"`
-}
-
-// Connections holds the /connections response.
-type Connections struct {
-	DownloadTotal int64         `json:"downloadTotal"`
-	UploadTotal   int64         `json:"uploadTotal"`
-	Connections   []*Connection `json:"connections"`
-}
-
-// GetConnections reads active connections.
-func (c *Client) GetConnections(ctx context.Context) (*Connections, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/connections", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET /connections: HTTP %d", resp.StatusCode)
-	}
-	var cs Connections
-	if err := json.NewDecoder(resp.Body).Decode(&cs); err != nil {
-		return nil, err
-	}
-	return &cs, nil
-}
-
-// CloseConnection closes one connection by id.
-func (c *Client) CloseConnection(ctx context.Context, id string) error {
-	path := "/connections/" + url.PathEscape(id)
-	resp, err := c.do(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("DELETE %s: HTTP %d", path, resp.StatusCode)
-	}
-	return nil
 }
 
 // CloseConnections closes every active connection.

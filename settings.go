@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -41,6 +42,13 @@ type savedSelection struct {
 	Selected string `json:"selected"`
 }
 
+// defaultProxyBypass keeps local and Apple time-sync traffic off the proxy;
+// the user can edit the list in the settings pane and reset it here.
+const defaultProxyBypass = "127.*,192.168.*,10.*,localhost,*.local,timestamp.apple.com"
+
+// defaultBenchmarkURL is ClashX Meta's latency test endpoint.
+const defaultBenchmarkURL = "http://cp.cloudflare.com/generate_204"
+
 // settings holds the editable controller configuration.
 type settings struct {
 	mixedPort      string
@@ -56,6 +64,11 @@ type settings struct {
 	allowLAN       bool
 	showTraffic    bool
 	tun            bool
+	ipv6           bool
+	benchmarkURL   string
+	proxyBypass    string
+	suspendSSIDs   string
+	noNotify       bool
 	selections     []savedSelection
 	// proxyBackup is the user's own system-proxy config captured before we
 	// overwrote it; restoring it beats switching ours off.
@@ -79,6 +92,11 @@ type settingsJSON struct {
 	AllowLAN       bool                  `json:"allowLAN"`
 	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
 	TUN            bool                  `json:"tun"`
+	IPv6           bool                  `json:"ipv6,omitempty"`
+	BenchmarkURL   string                `json:"benchmarkURL,omitempty"`
+	ProxyBypass    string                `json:"proxyBypass,omitempty"`
+	SuspendSSIDs   string                `json:"suspendSSIDs,omitempty"`
+	NoNotify       bool                  `json:"noNotify,omitempty"`
 	Selections     []savedSelection      `json:"selections,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
 	// Legacy single-subscription field, migrated into Profiles on load.
@@ -93,6 +111,8 @@ func loadSettings(dir string) *settings {
 		showTraffic:    true,
 		autoUpdate:     true,
 		updateInterval: 360,
+		benchmarkURL:   defaultBenchmarkURL,
+		proxyBypass:    defaultProxyBypass,
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
 	if err != nil {
@@ -116,6 +136,15 @@ func loadSettings(dir string) *settings {
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
 	s.tun = w.TUN
+	s.ipv6 = w.IPv6
+	if w.BenchmarkURL != "" {
+		s.benchmarkURL = w.BenchmarkURL
+	}
+	if w.ProxyBypass != "" {
+		s.proxyBypass = w.ProxyBypass
+	}
+	s.suspendSSIDs = w.SuspendSSIDs
+	s.noNotify = w.NoNotify
 	s.selections = w.Selections
 	s.proxyBackup = w.ProxyBackup
 	if w.ShowTraffic != nil {
@@ -144,6 +173,17 @@ func subFileMtime(dir, file string) time.Time {
 	return fi.ModTime()
 }
 
+// splitList parses a comma-separated settings field into trimmed entries.
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // saveSettings persists settings to the app config dir.
 func saveSettings(dir string, s *settings) {
 	w := settingsJSON{
@@ -159,6 +199,11 @@ func saveSettings(dir string, s *settings) {
 		SystemProxy:    s.systemProxy,
 		AllowLAN:       s.allowLAN,
 		TUN:            s.tun,
+		IPv6:           s.ipv6,
+		BenchmarkURL:   s.benchmarkURL,
+		ProxyBypass:    s.proxyBypass,
+		SuspendSSIDs:   s.suspendSSIDs,
+		NoNotify:       s.noNotify,
 		Selections:     s.selections,
 		ProxyBackup:    s.proxyBackup,
 		ShowTraffic:    &s.showTraffic,
@@ -182,8 +227,44 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 		field.Field(c, field.Props{Label: "外部控制器", Hint: "控制器 API 监听端口"}, func() {
 			input.Input(c, input.Props{Value: &s.controller})
 		})
-		field.Field(c, field.Props{Label: "密钥", Hint: "控制器 API 的 Bearer 令牌"}, func() {
+		field.Field(c, field.Props{Label: "密钥", Hint: "控制器 API 的 Bearer 令牌；留空则沿用配置文件"}, func() {
 			input.Input(c, input.Props{Value: &s.secret, Placeholder: "可选"})
+		})
+		switcher.Switch(c, switcher.Props{
+			On:    &s.ipv6,
+			Label: "启用 IPv6",
+			Changed: func(bool) {
+				saveSettings(coreDir(), p.app.settings)
+			},
+		})
+		field.Field(c, field.Props{Label: "代理延迟测试地址", Hint: "节点测速使用的 URL"}, func() {
+			input.Input(c, input.Props{Value: &s.benchmarkURL, Placeholder: defaultBenchmarkURL})
+		})
+		field.Field(c, field.Props{Label: "特定 WiFi 下自动暂停", Hint: "SSID 用英文逗号分隔；命中时暂时关闭系统代理与 Tun"}, func() {
+			input.Input(c, input.Props{Value: &s.suspendSSIDs, Placeholder: "例如: CompanyWiFi,Home-5G"})
+		})
+		field.Field(c, field.Props{Label: "忽略这些主机与域的代理设置", Hint: "逗号分隔；系统代理的 bypass 列表"}, func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				input.Input(c, input.Props{Value: &s.proxyBypass})
+				ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
+					button.Button(c, button.Props{
+						Label:   "重置",
+						Variant: button.Outline,
+						OnClick: func() {
+							s.proxyBypass = defaultProxyBypass
+							saveSettings(coreDir(), p.app.settings)
+							p.app.win.Update(func() {})
+						},
+					})
+				})
+			})
+		})
+		switcher.Switch(c, switcher.Props{
+			On:    &s.noNotify,
+			Label: "减少通知",
+			Changed: func(bool) {
+				saveSettings(coreDir(), p.app.settings)
+			},
 		})
 		ui.Divider(c)
 		field.Field(c, field.Props{Label: "本地配置", Hint: "加载本地 config.yaml（选择后停用托管订阅）"}, func() {
