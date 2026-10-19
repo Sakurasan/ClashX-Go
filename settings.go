@@ -231,7 +231,11 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 				if err := mygo.App.SetOpenAtLogin(s.startAtLogin); err != nil {
 					// Roll the check box back and surface the error.
 					s.startAtLogin = !s.startAtLogin
-					p.app.showToast("开机启动", "无法修改登录项："+err.Error())
+					msg := err.Error()
+					if strings.Contains(msg, "needs an app bundle") {
+						msg = "当前以开发模式运行（非 .app 包），登录项不可用；用 mygo build 打包运行后即可设置。"
+					}
+					p.app.showToast("开机启动", msg)
 					return
 				}
 				saveSettings(coreDir(), p.app.settings)

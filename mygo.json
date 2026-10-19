@@ -2,5 +2,6 @@
   "name": "clashx-go",
   "identifier": "com.example.clashxgo",
   "version": "0.1.0",
-  "out": "build"
+  "out": "build",
+  "icon": "assets/icon.png"
 }
