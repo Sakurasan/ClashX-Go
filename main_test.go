@@ -97,3 +97,21 @@ func TestTrayMenu(t *testing.T) {
 		t.Errorf("group label = %q", got)
 	}
 }
+
+func TestHumanSpeed(t *testing.T) {
+	cases := []struct {
+		n    int64
+		want string
+	}{
+		{512, "    0KB/s"},
+		{47206, "   46KB/s"},
+		{1024 * 1024, " 1.00MB/s"},
+		{150 * 1024 * 1024, "150.0MB/s"},
+		{2 * 1024 * 1024 * 1024, "  2.0GB/s"},
+	}
+	for _, c := range cases {
+		if got := humanSpeed(c.n); got != c.want {
+			t.Errorf("humanSpeed(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}

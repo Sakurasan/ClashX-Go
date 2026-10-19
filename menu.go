@@ -240,7 +240,7 @@ func (m *trayMenu) findGroup(name string) *groupEntry {
 func (m *trayMenu) setSpeedTitle(s core.State) {
 	want := ""
 	if m.app.settings.showTraffic && s.Running {
-		want = fmt.Sprintf("↓ %s ↑ %s", humanSpeed(s.Traffic.Down), humanSpeed(s.Traffic.Up))
+		want = fmt.Sprintf("↓%s ↑%s", humanSpeed(s.Traffic.Down), humanSpeed(s.Traffic.Up))
 	}
 	if want != m.speedTitle {
 		m.speedTitle = want
@@ -734,20 +734,21 @@ func groupsSignature(groups []*core.GroupView) string {
 	return b.String()
 }
 
-// humanSpeed renders traffic as a fixed 8-column field so the menu bar
-// title keeps a constant width and does not jitter as values change.
+// humanSpeed follows ClashX's StatusItemView formatting: whole KB/s below
+// 1MB, two decimals below 100MB, one decimal up to 1000MB, then GB/s —
+// right-padded to a fixed 9-column field so the menu bar never jitters.
 func humanSpeed(n int64) string {
-	const unit = 1024
+	kb := n / 1024
 	var s string
 	switch {
-	case n < unit:
-		s = fmt.Sprintf("%d B/s", n)
-	case n < unit*unit:
-		s = fmt.Sprintf("%.1f K/s", float64(n)/unit)
-	case n < unit*unit*unit:
-		s = fmt.Sprintf("%.1f M/s", float64(n)/unit/unit)
+	case kb < 1024:
+		s = fmt.Sprintf("%dKB/s", kb)
+	case kb < 100*1024:
+		s = fmt.Sprintf("%.2fMB/s", float64(kb)/1024)
+	case kb < 1000*1024:
+		s = fmt.Sprintf("%.1fMB/s", float64(kb)/1024)
 	default:
-		s = fmt.Sprintf("%.1f G/s", float64(n)/unit/unit/unit)
+		s = fmt.Sprintf("%.1fGB/s", float64(kb)/1024/1024)
 	}
-	return fmt.Sprintf("%8s", s)
+	return fmt.Sprintf("%9s", s)
 }
