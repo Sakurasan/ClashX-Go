@@ -60,6 +60,8 @@ func aboutView(c *ui.Context) {
 		ui.Divider(c)
 		ui.Link(c, "GitHub for Clash Meta: https://github.com/MetaCubeX/mihomo",
 			"https://github.com/MetaCubeX/mihomo")
+		ui.Link(c, "GitHub for ClashX Go: https://github.com/Sakurasan/ClashX-go",
+			"https://github.com/Sakurasan/ClashX-go")
 		ui.Row(c).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "配置目录: ~/.config/clashx-go").FontSize(12)
 			button.Button(c, button.Props{

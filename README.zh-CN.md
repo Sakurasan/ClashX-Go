@@ -1,4 +1,7 @@
-# ClashX Go
+<p align="center">
+<img src="assets/icon.png" alt="ClashX Go icon" width="100">
+</p>
+<h1 align="center">ClashX Go</h1>
 
 [English](README.md) | **简体中文**
 
@@ -10,7 +13,6 @@
 
 整个应用是一个自包含的 `.app`——内核随包分发，运行时不下载任何东西。
 
-![ClashX Go 图标](assets/icon.png)
 
 ## 功能
 
@@ -20,7 +22,7 @@
   延迟测速、配置管理
 - 菜单栏双行实时速率（`↑ / ↓`），固定宽度不抖动；系统代理与 TUN 都没开时
   整条状态项变浅
-- 使用 ClashX Meta 的猫剪影图标，可在配置目录放 `menuImage.png` 自定义
+- 自定义图标，可在配置目录放 `menuImage.png` 自定义
 
 **代理控制**
 
@@ -54,7 +56,8 @@
 
 ## 安装
 
-从 Releases 下载 `.dmg`，打开后把 `clashx-go.app` 拖进「应用程序」。
+从 [Releases 页面](https://github.com/Sakurasan/ClashX-go/releases) 下载
+`.dmg`，打开后把 `clashx-go.app` 拖进「应用程序」。
 
 应用为 ad-hoc 签名（没有 Developer ID），首次启动可能被 Gatekeeper 拦截：
 右键应用 → **打开**，或在「系统设置 → 隐私与安全性」中允许。
@@ -85,6 +88,27 @@ go test ./... && go vet ./...
 
 > 说明：macOS 的登录项（开机启动）要求以真正的 `.app` 包运行，因此该开关只在
 > MyGo 打包版中可用，裸二进制（开发模式）会提示不可用。
+
+## 自动构建与更新
+
+GitHub Actions（`.github/workflows/build.yml`）在每次 push / PR 时执行
+`go vet`、`go tool mygo vet` 与测试，并构建通用版 `.app`；推送 `v*` 标签会
+把 DMG（配置更新后还有签名更新清单）发布为 GitHub Release。每次 push 到
+`main` 还会更新一个滚动的 **Nightly** 预发布版：不签名、不会成为「Latest
+Release」，因此稳定版更新源不会受它影响。
+
+应用内更新使用 MyGo 的签名更新器：
+
+1. `go tool mygo keygen` 生成 `mygo-update.key`（私钥，切勿入库）与
+   `mygo-update.pub`
+2. 在 `mygo.json` 中填入公钥：
+   `"updates": { "publicKey": "…", "github": "<owner>/<repo>" }`
+3. 把私钥内容加为仓库 Secret：`MYGO_UPDATER_PRIVATE_KEY`
+4. 修改 `mygo.json` 的 `version`，在 `CHANGELOG.md` 加 `## <version>` 小节
+   （会作为更新说明），打 `vX.Y.Z` 标签，CI 会发布签名更新源
+
+之后菜单 **帮助 → 检查更新…** 会检查最新 tag、展示更新说明并下载安装、重启。
+未配置 `updates` 的构建会明确提示「当前构建未启用更新检查」。
 
 ## 使用
 
@@ -150,6 +174,10 @@ assets/              应用图标与菜单栏猫图标（内嵌）
 - [MyGo](https://mygo.egoist.dev)（egoist）——原生 macOS UI 框架
 - [uix](https://github.com/smallnest/uix) ——组件库
 - [zashboard](https://github.com/Zephyruso/zashboard) ——Web 仪表盘
+
+## Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Sakurasan/ClashX-go&type=Date)](https://star-history.com/#Sakurasan/ClashX-go&Date)
 
 ## 许可证
 

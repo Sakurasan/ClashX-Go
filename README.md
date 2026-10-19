@@ -1,4 +1,7 @@
-# ClashX Go
+<p align="center">
+<img src="assets/icon.png" alt="ClashX Go icon" width="100">
+</p>
+<h1 align="center">ClashX Go</h1>
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -11,8 +14,6 @@ groups, node latency badges and live speeds, plus a ClashX-style preferences
 window — but with a single self-contained `.app` that bundles the core and
 needs no runtime download.
 
-![ClashX Go icon](assets/icon.png)
-
 ## Features
 
 **Menu bar, ClashX style**
@@ -21,7 +22,7 @@ needs no runtime download.
   badges (`✅ / ⚠️ / ❌`), node switching, latency tests, config management
 - Two-line live speed in the menu bar (`↑ / ↓`), fixed width so it never
   jitters; the whole item dims while neither system proxy nor TUN is active
-- ClashX Meta's cat icon (menu bar), interchangeable with a custom
+- Custom icon (menu bar), interchangeable with a custom
   `menuImage.png` in the config folder
 
 **Proxy control**
@@ -60,8 +61,9 @@ needs no runtime download.
 
 ## Install
 
-Download the `.dmg` from the Releases page, open it and drag
-`clashx-go.app` into `Applications`.
+Download the `.dmg` from the
+[Releases page](https://github.com/Sakurasan/ClashX-go/releases), open it and
+drag `clashx-go.app` into `Applications`.
 
 The app is ad-hoc signed (no Developer ID), so the first launch may be
 blocked by Gatekeeper: right-click the app → **Open**, or allow it in
@@ -93,6 +95,30 @@ go test ./... && go vet ./...
 
 > Note: macOS login items (开机启动) require a real `.app` bundle, so that
 > switch only works in a MyGo build, not in a plain development binary.
+
+## Auto-build and updates
+
+GitHub Actions (`.github/workflows/build.yml`) runs `go vet`, `go tool mygo
+vet` and the tests, then builds the universal `.app` on every push and pull
+request. Pushing a `v*` tag publishes the DMG (and signed update manifests
+once configured) as a GitHub release. Every push to `main` also refreshes a
+rolling **Nightly** prerelease; it is unsigned and never the *latest*
+release, so the stable update feed ignores it.
+
+Self-updates use MyGo's signed updater:
+
+1. `go tool mygo keygen` — writes `mygo-update.key` (secret) and
+   `mygo-update.pub`.
+2. Put the public key in `mygo.json`:
+   `"updates": { "publicKey": "…", "github": "<owner>/<repo>" }`.
+3. Add the private key as the repository secret `MYGO_UPDATER_PRIVATE_KEY`.
+4. Bump `version` in `mygo.json`, add a `## <version>` section to
+   `CHANGELOG.md` (it becomes the update notes), and tag `vX.Y.Z`; the
+   workflow publishes the signed feed.
+
+The menu's **帮助 → 检查更新…** then checks the newest tagged release, shows
+the notes and installs + relaunches. Builds without the `updates` block say
+so instead of failing silently.
 
 ## Usage
 
@@ -164,6 +190,10 @@ assets/              app icon and menu bar cat (embedded)
 - [MyGo](https://mygo.egoist.dev) by egoist — native macOS UI framework
 - [uix](https://github.com/smallnest/uix) — component library
 - [zashboard](https://github.com/Zephyruso/zashboard) — web dashboard
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Sakurasan/ClashX-go&type=Date)](https://star-history.com/#Sakurasan/ClashX-go&Date)
 
 ## License
 

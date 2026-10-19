@@ -524,6 +524,9 @@ func (m *trayMenu) helpSubmenu(s core.State) *mygo.MenuItem {
 	m.apiIt = &mygo.MenuItem{Label: portLabel("API 端口", a.apiPort(), s.Running), Disabled: true}
 	m.ipIt = &mygo.MenuItem{Label: "IP: " + localIP(), Disabled: true}
 	return &mygo.MenuItem{Label: "帮助", Submenu: []*mygo.MenuItem{
+		{Label: "检查更新…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.checkForUpdates()
+		}},
 		{Label: "关于…", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.showAbout()
 		}},

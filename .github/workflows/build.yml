@@ -1,0 +1,71 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Fetch mihomo cores
+        run: scripts/fetch-cores.sh
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go tool mygo vet .
+          go test ./...
+
+      - name: Build universal app
+        env:
+          # Only tagged builds sign the update feed; nightlies stay unsigned.
+          MYGO_UPDATER_PRIVATE_KEY: ${{ github.ref_type == 'tag' && secrets.MYGO_UPDATER_PRIVATE_KEY || '' }}
+        run: go tool mygo build -platform darwin/universal
+
+      - name: Upload app and disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: clashx-go-darwin-universal
+          path: build/darwin-universal/
+          if-no-files-found: error
+
+      - name: Publish nightly
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          # Never the "latest" release: the updater's feed ignores prereleases.
+          make_latest: "false"
+          body: |
+            Automated build of `main` at ${{ github.sha }}.
+          files: |
+            build/darwin-universal/*.dmg
+            build/darwin-universal/*.zip
+          fail_on_unmatched_files: false
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            build/darwin-universal/*.dmg
+            build/darwin-universal/*.zip
+            build/darwin-universal/update-*.json
+          fail_on_unmatched_files: false

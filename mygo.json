@@ -1,7 +1,12 @@
 {
   "name": "clashx-go",
-  "identifier": "com.example.clashxgo",
+  "identifier": "com.sakurasan.clashxgo",
   "version": "0.1.0",
   "out": "build",
-  "icon": "assets/icon.png"
+  "icon": "assets/icon.png",
+  "updates": {
+    "publicKey": "X0Bk+HCwfT3YOijVA0BvxDrnERZ4084oDoU6WBvT1pA=",
+    "github": "Sakurasan/ClashX-go",
+    "tagPrefix": "v"
+  }
 }
