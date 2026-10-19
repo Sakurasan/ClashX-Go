@@ -17,8 +17,8 @@ type State struct {
 	Selected map[string]string // group name -> chosen member
 	Groups   []*GroupView
 	Traffic  Traffic
-	Memory   int64 // bytes in use
-	Level    string
+	Memory   int64  // bytes in use
+	Level    string // core log-level, refreshed by the poll loop
 	CorePath string
 	Log      []string
 
@@ -302,6 +302,31 @@ func (c *Controller) CurrentConfig() Config {
 // SetTUN hot-toggles the core's TUN interface without a restart.
 func (c *Controller) SetTUN(ctx context.Context, enable bool) error {
 	return c.client.SetTUN(ctx, enable)
+}
+
+// SetAllowLAN toggles LAN access on the running core (live patch).
+func (c *Controller) SetAllowLAN(ctx context.Context, allow bool) error {
+	if err := c.client.SetAllowLAN(ctx, allow); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.cfg.AllowLAN = allow
+	c.mu.Unlock()
+	return nil
+}
+
+// SetLogLevel changes the core log level live.
+func (c *Controller) SetLogLevel(ctx context.Context, level string) error {
+	if err := c.client.SetLogLevel(ctx, level); err != nil {
+		return err
+	}
+	c.setState(func(s *State) { s.Level = level })
+	return nil
+}
+
+// HealthCheckProviders triggers provider health checks (Benchmark extra).
+func (c *Controller) HealthCheckProviders(ctx context.Context) {
+	c.client.HealthCheckProviders(ctx)
 }
 
 // SetMode changes the global mode and reflects it locally.

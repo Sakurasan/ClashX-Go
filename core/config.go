@@ -34,6 +34,9 @@ type Config struct {
 	SubscriptionFile string `json:"subscription-file"`
 	// AllowLAN lets devices on the local network use the mixed port.
 	AllowLAN bool `json:"allow-lan"`
+	// ExternalUI is a directory (relative to the working dir) served at
+	// /ui by the controller — the bundled dashboard for the 控制台 item.
+	ExternalUI string `json:"external-ui,omitempty"`
 	// TUN enables the core's TUN interface. Opening the device needs
 	// administrator rights; without them the core exits at startup.
 	TUN bool `json:"tun"`
@@ -67,7 +70,7 @@ var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*
 
 // runningOverrideKeys are top-level keys the app owns: the settings panel
 // and menu toggles win over whatever the user's profile declares.
-var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "tun"}
+var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "tun", "external-ui"}
 
 // writeRunningConfig copies a user profile to dest, stripping its
 // app-managed keys (including whole mapping blocks like tun:) and
@@ -81,6 +84,9 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "mixed-port: %d\n", cfg.MixedPort)
 	fmt.Fprintf(&b, "allow-lan: %t\n", cfg.AllowLAN)
+	if cfg.ExternalUI != "" {
+		fmt.Fprintf(&b, "external-ui: %s\n", cfg.ExternalUI)
+	}
 	fmt.Fprintf(&b, "tun:\n  enable: %t\n  stack: system\n"+
 		"  strict-route: false\n  dns-hijack:\n    - any:53\n", cfg.TUN)
 	skipBlock := false
@@ -214,6 +220,9 @@ func (c Config) WriteYAML(dir string) (string, error) {
 	}
 	fmt.Fprintf(&b, "allow-lan: %t\n", c.AllowLAN)
 	fmt.Fprintf(&b, "mode: %s\n", c.Mode)
+	if c.ExternalUI != "" {
+		fmt.Fprintf(&b, "external-ui: %s\n", c.ExternalUI)
+	}
 	b.WriteString("ipv6: false\n")
 	b.WriteString("log-level: info\n")
 	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +

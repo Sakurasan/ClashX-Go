@@ -122,6 +122,59 @@ func (c *Client) SetMode(ctx context.Context, mode string) error {
 	return nil
 }
 
+// SetAllowLAN toggles LAN access live (PATCH /configs), no restart.
+func (c *Client) SetAllowLAN(ctx context.Context, allow bool) error {
+	return c.patch(ctx, fmt.Sprintf(`{"allow-lan":%t}`, allow))
+}
+
+// SetLogLevel changes the core log level live.
+func (c *Client) SetLogLevel(ctx context.Context, level string) error {
+	return c.patch(ctx, fmt.Sprintf(`{"log-level":%q}`, level))
+}
+
+func (c *Client) patch(ctx context.Context, body string) error {
+	resp, err := c.do(ctx, http.MethodPatch, "/configs", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("PATCH /configs: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// HealthCheckProviders triggers a health check on every proxy provider,
+// refreshing url-test/auto groups (ClashX Benchmark does the same).
+func (c *Client) HealthCheckProviders(ctx context.Context) {
+	resp, err := c.do(ctx, http.MethodGet, "/providers/proxies", nil)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	var v struct {
+		Providers []struct {
+			Name string `json:"name"`
+		} `json:"providers"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&v) != nil {
+		return
+	}
+	for _, p := range v.Providers {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+			c.Base+"/providers/proxies/"+url.PathEscape(p.Name)+"/healthcheck?async=true", nil)
+		if err != nil {
+			continue
+		}
+		if c.Secret != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Secret)
+		}
+		if r, err := c.HTTP.Do(req); err == nil {
+			r.Body.Close()
+		}
+	}
+}
+
 // SetTUN toggles the TUN interface at runtime (mihomo hot-patches it),
 // avoiding a core restart.
 func (c *Client) SetTUN(ctx context.Context, enable bool) error {

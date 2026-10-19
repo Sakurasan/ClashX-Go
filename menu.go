@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	neturl "net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,6 +37,13 @@ type trayMenu struct {
 	lanItem    *mygo.MenuItem
 	subInfo    string
 	subInfoIt  *mygo.MenuItem
+	level      string
+	levelRadio map[string]*mygo.MenuItem
+	httpIt     *mygo.MenuItem
+	apiIt      *mygo.MenuItem
+	ipIt       *mygo.MenuItem
+	httpText   string
+	apiText    string
 	groups     []*groupEntry
 	groupSig   string
 	speedTitle string
@@ -59,11 +69,13 @@ func (m *trayMenu) build(s core.State) {
 
 	m.modeRadio = map[string]*mygo.MenuItem{}
 	var modeSub []*mygo.MenuItem
+	modeAccel := map[string]string{"rule": "Alt+R", "global": "Alt+G", "direct": "Alt+D"}
 	for _, mode := range []string{"rule", "global", "direct"} {
 		it := &mygo.MenuItem{
-			Label:   modeNames[mode],
-			Type:    mygo.MenuItemRadio,
-			Checked: s.Mode == mode,
+			Label:       modeNames[mode],
+			Type:        mygo.MenuItemRadio,
+			Checked:     s.Mode == mode,
+			Accelerator: modeAccel[mode],
 		}
 		mode := mode
 		it.Click = func(*mygo.MenuItem, *mygo.Window) { go a.setMode(mode) }
@@ -122,7 +134,7 @@ func (m *trayMenu) build(s core.State) {
 	items = append(items, m.loginItem, m.speedItem, m.lanItem, mygo.Separator())
 
 	testAll := &mygo.MenuItem{Label: "延迟测速", Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups(); a.reopenMenu() }}
-	console := &mygo.MenuItem{Label: "控制台", Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.showPanel(tabOverview) }}
+	console := &mygo.MenuItem{Label: "控制台", Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.openConsole() }}
 	items = append(items, testAll, console, mygo.Separator())
 
 	m.subInfoIt = &mygo.MenuItem{Label: subInfoLabel(s), Disabled: true}
@@ -134,7 +146,7 @@ func (m *trayMenu) build(s core.State) {
 		{Label: "重载核心配置", Click: func(*mygo.MenuItem, *mygo.Window) { a.reloadCore() }},
 		{Label: "关闭所有连接", Click: func(*mygo.MenuItem, *mygo.Window) { go a.closeConnections() }},
 	}}
-	items = append(items, config, more, meta, mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit})
+	items = append(items, config, more, meta, m.helpSubmenu(s), mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit})
 
 	m.menu = mygo.NewMenu(items)
 	m.groupSig = groupsSignature(s.Groups)
@@ -300,10 +312,22 @@ func (a *app) setLoginToggle(it *mygo.MenuItem) {
 	saveSettings(coreDir(), a.settings)
 }
 
+// setLANToggle patches allow-lan live on a running core (ClashX does not
+// restart either); only a cold core goes through the config path.
 func (a *app) setLANToggle(it *mygo.MenuItem) {
-	a.settings.allowLAN = it.IsChecked()
+	on := it.IsChecked()
+	a.settings.allowLAN = on
 	saveSettings(coreDir(), a.settings)
 	go func() {
+		if a.ctrl.State().Running {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := a.ctrl.SetAllowLAN(ctx, on)
+			cancel()
+			if err == nil {
+				return
+			}
+			log.Printf("局域网热切换失败，转重启: %v", err)
+		}
 		if err := a.applyConfig(a.settingsConfig()); err != nil {
 			log.Printf("局域网重启待重试: %v", err)
 		}
@@ -353,7 +377,7 @@ func (a *app) setTUNToggle(it *mygo.MenuItem) {
 
 func (a *app) copyProxyCommand() {
 	port := a.mixedPort()
-	cmd := fmt.Sprintf("export http_proxy=http://127.0.0.1:%d\nexport https_proxy=http://127.0.0.1:%d\nexport all_proxy=socks5://127.0.0.1:%d", port, port, port)
+	cmd := fmt.Sprintf("export https_proxy=http://127.0.0.1:%d http_proxy=http://127.0.0.1:%d all_proxy=socks5://127.0.0.1:%d", port, port, port)
 	if err := mygo.Clipboard.Write(transfer.TextData(cmd)); err != nil {
 		a.reportError("复制失败", err.Error())
 	}
@@ -371,6 +395,11 @@ func (a *app) testAllGroups() {
 	for _, g := range a.ctrl.State().Groups {
 		go a.testGroup(g.Name)
 	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		a.ctrl.HealthCheckProviders(ctx)
+	}()
 }
 
 func (a *app) selectProxy(group, member string) {
@@ -424,6 +453,79 @@ func (a *app) closeConnections() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = a.ctrl.CloseConnections(ctx)
+}
+
+// helpSubmenu mirrors ClashX's 帮助: about, live log level, log file and
+// the read-only port/IP info lines refreshed with every poll.
+func (m *trayMenu) helpSubmenu(s core.State) *mygo.MenuItem {
+	a := m.app
+	m.levelRadio = map[string]*mygo.MenuItem{}
+	var levelSub []*mygo.MenuItem
+	for _, lv := range []string{"silent", "error", "warning", "info", "debug"} {
+		lv := lv
+		it := &mygo.MenuItem{
+			Label:   strings.ToUpper(lv),
+			Type:    mygo.MenuItemRadio,
+			Checked: strings.EqualFold(s.Level, lv),
+		}
+		it.Click = func(*mygo.MenuItem, *mygo.Window) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := a.ctrl.SetLogLevel(ctx, lv); err != nil {
+				a.reportError("日志等级", err.Error())
+			}
+		}
+		m.levelRadio[lv] = it
+		levelSub = append(levelSub, it)
+	}
+	m.level = s.Level
+	m.httpIt = &mygo.MenuItem{Label: portLabel("HTTP/SOCKS 端口", a.mixedPort(), s.Running), Disabled: true}
+	m.apiIt = &mygo.MenuItem{Label: portLabel("API 端口", a.apiPort(), s.Running), Disabled: true}
+	m.ipIt = &mygo.MenuItem{Label: "IP: " + localIP(), Disabled: true}
+	return &mygo.MenuItem{Label: "帮助", Submenu: []*mygo.MenuItem{
+		{Label: "关于…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			mygo.Dialog.Message(mygo.MessageOptions{
+				Type: mygo.MessageInfo, Title: "ClashX Go",
+				Message: "ClashX Go 0.1.0",
+				Detail:  "mihomo 核心 " + s.Version + " · 复刻 ClashX 的菜单栏代理",
+			})
+		}},
+		mygo.Separator(),
+		{Label: "日志等级", Submenu: levelSub},
+		{Label: "打开日志文件", Accelerator: "Cmd+L", Click: func(*mygo.MenuItem, *mygo.Window) {
+			_ = mygo.Shell.OpenPath(a.ctrl.Manager().LogPath())
+		}},
+		mygo.Separator(),
+		m.httpIt, m.apiIt, m.ipIt,
+	}}
+}
+
+func portLabel(name string, port int, running bool) string {
+	if !running {
+		return name + ": —"
+	}
+	return fmt.Sprintf("%s: %d", name, port)
+}
+
+// refreshHelpInfo syncs the 帮助 info lines with a new state.
+func (m *trayMenu) refreshHelpInfo(s core.State) {
+	if m.httpIt == nil {
+		return
+	}
+	if want := portLabel("HTTP/SOCKS 端口", m.app.mixedPort(), s.Running); want != m.httpText {
+		m.httpText = want
+		m.httpIt.SetLabel(want)
+	}
+	if want := portLabel("API 端口", m.app.apiPort(), s.Running); want != m.apiText {
+		m.apiText = want
+		m.apiIt.SetLabel(want)
+	}
+	if !s.Running && s.Level != m.level {
+		m.level = s.Level
+		for lv, it := range m.levelRadio {
+			it.SetChecked(strings.EqualFold(s.Level, lv))
+		}
+	}
 }
 
 // configSubmenu mirrors ClashX Meta's 配置 menu: the managed profiles list
@@ -533,8 +635,47 @@ func (a *app) reopenMenu() {
 	})
 }
 
+// openConsole shows the core's built-in dashboard (zashboard served at
+// /ui by external-ui), falling back to the panel overview when the
+// dashboard assets are not installed.
+func (a *app) openConsole() {
+	if _, err := os.Stat(filepath.Join(coreDir(), "dashboard", "index.html")); err != nil {
+		a.showPanel(tabOverview)
+		return
+	}
+	if !a.ctrl.State().Running {
+		a.reportError("控制台", "核心未运行。")
+		return
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/ui", a.apiPort())
+	if a.settings.secret != "" {
+		url += "?token=" + urlquery(a.settings.secret)
+	}
+	_ = mygo.Shell.OpenExternal(url)
+}
+
+func urlquery(s string) string { return neturl.QueryEscape(s) }
+
 func (a *app) mixedPort() int {
 	return parsePort(a.settings.mixedPort, core.DefaultConfig().MixedPort)
+}
+
+func (a *app) apiPort() int {
+	return parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
+}
+
+// localIP returns the primary LAN IPv4 for the 帮助 info line.
+func localIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "—"
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+			return ipn.IP.String()
+		}
+	}
+	return "—"
 }
 
 // --- label helpers ---

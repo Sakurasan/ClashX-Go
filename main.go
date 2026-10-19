@@ -219,6 +219,9 @@ func (a *app) applyConfig(cfg core.Config) error {
 		err := a.ctrl.ReloadConfig(ctx, cfg)
 		cancel()
 		if err == nil {
+			// ClashX closes established chains after a config change so
+			// new routing applies immediately to persistent connections.
+			go a.closeConnections()
 			return nil
 		}
 		log.Printf("live reload failed, restarting core: %v", err)
