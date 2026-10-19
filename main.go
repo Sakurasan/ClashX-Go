@@ -317,13 +317,23 @@ func trayIcon(ink color.NRGBA) []byte {
 	return b.Bytes()
 }
 
+// proxyActive reports whether traffic is actually routed: system proxy or
+// TUN on. The status icon is dimmed while neither is.
+func (a *app) proxyActive() bool {
+	return a.settings.systemProxy || a.settings.tun
+}
+
 // updateTrayIcon swaps between the monochrome stopped icon and a colored
-// running one, like ClashX's icon state.
+// running one, like ClashX's icon state. Without system proxy or TUN the
+// running paw is drawn at reduced opacity (ClashX Meta's dimmed state).
 func (a *app) updateTrayIcon(running bool) {
-	if running {
-		_ = a.tray.SetIcon(trayIcon(color.NRGBA{R: 37, G: 99, B: 235, A: 255}), false)
-	} else {
+	switch {
+	case !running:
 		_ = a.tray.SetIcon(trayIcon(color.NRGBA{A: 255}), true)
+	case a.proxyActive():
+		_ = a.tray.SetIcon(trayIcon(color.NRGBA{R: 37, G: 99, B: 235, A: 255}), false)
+	default:
+		_ = a.tray.SetIcon(trayIcon(color.NRGBA{R: 37, G: 99, B: 235, A: 110}), false)
 	}
 }
 

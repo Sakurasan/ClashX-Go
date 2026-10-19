@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"image/png"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -114,5 +116,33 @@ func TestHumanSpeed(t *testing.T) {
 		if got := humanSpeed(c.n); got != c.want {
 			t.Errorf("humanSpeed(%d) = %q, want %q", c.n, got, c.want)
 		}
+	}
+}
+
+// The paw is drawn at full ink when the proxy is active and dimmed (still
+// visible, like ClashX Meta's disabled tint) when it is not.
+func TestTraySpeedIconDimState(t *testing.T) {
+	maxAlpha := func(active bool) uint8 {
+		img, err := png.Decode(bytes.NewReader(traySpeedIcon("3K/s", "9.9M/s", active)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m uint8
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < 46; x++ { // paw column only
+				_, _, _, a := img.At(x, y).RGBA()
+				if v := uint8(a >> 8); v > m {
+					m = v
+				}
+			}
+		}
+		return m
+	}
+	if got := maxAlpha(true); got != 255 {
+		t.Errorf("active paw alpha = %d, want 255", got)
+	}
+	if got := maxAlpha(false); got != 110 {
+		t.Errorf("inactive paw alpha = %d, want 110", got)
 	}
 }

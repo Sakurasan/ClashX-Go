@@ -239,14 +239,16 @@ func (m *trayMenu) findGroup(name string) *groupEntry {
 
 // setSpeedTitle mirrors ClashX's traffic read-out: the paw plus two speed
 // lines, composed into one template bitmap (the tray title cannot show
-// two lines).
+// two lines). Like ClashX Meta, the paw is dimmed while neither system
+// proxy nor TUN routes traffic.
 func (m *trayMenu) setSpeedTitle(s core.State) {
 	a := m.app
+	active := a.proxyActive()
 	if a.settings.showTraffic && s.Running {
 		up, down := humanSpeed(s.Traffic.Up), humanSpeed(s.Traffic.Down)
-		if key := up + "|" + down; key != m.speedTitle {
+		if key := fmt.Sprintf("%s|%s|%t", up, down, active); key != m.speedTitle {
 			m.speedTitle = key
-			_ = a.tray.SetIcon(traySpeedIcon(up, down), true)
+			_ = a.tray.SetIcon(traySpeedIcon(up, down, active), true)
 		}
 		return
 	}
@@ -254,6 +256,18 @@ func (m *trayMenu) setSpeedTitle(s core.State) {
 		m.speedTitle = ""
 		a.updateTrayIcon(s.Running)
 	}
+}
+
+// refreshTrayIcon redraws the status icon after a proxy/TUN toggle so the
+// dimmed state updates immediately instead of on the next speed tick.
+func (a *app) refreshTrayIcon() {
+	s := a.ctrl.State()
+	if a.settings.showTraffic && s.Running {
+		a.menu.speedTitle = "" // force a redraw with the same numbers
+		a.menu.setSpeedTitle(s)
+		return
+	}
+	a.updateTrayIcon(s.Running)
 }
 
 // reportError surfaces a menu action failure as a real dialog: the panel
@@ -291,11 +305,13 @@ func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 				a.settings.systemProxy = false
 				saveSettings(coreDir(), a.settings)
 				a.menu.sysProxy.SetChecked(false)
+				a.refreshTrayIcon()
 				a.reportError("系统代理", err.Error())
 				return
 			}
 			a.settings.systemProxy = true
 			saveSettings(coreDir(), a.settings)
+			a.refreshTrayIcon()
 			return
 		}
 		// Off: put the user's own proxy config back (ClashX restoreProxy).
@@ -306,6 +322,7 @@ func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 		a.settings.systemProxy = false
 		a.settings.proxyBackup = nil
 		saveSettings(coreDir(), a.settings)
+		a.refreshTrayIcon()
 	}()
 }
 
@@ -349,6 +366,7 @@ func (a *app) setTUNToggle(it *mygo.MenuItem) {
 	on := it.IsChecked()
 	a.settings.tun = on
 	saveSettings(coreDir(), a.settings)
+	a.refreshTrayIcon()
 	mgr := a.ctrl.Manager()
 	if on || mgr.Privileged() {
 		if a.ctrl.State().Running && mgr.Privileged() {

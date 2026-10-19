@@ -118,8 +118,9 @@ func trayFont() font.Face {
 // so the %9s padding from humanSpeed is meaningless here — leading spaces
 // are trimmed. The text column is reserved at the widest 3-digit readout
 // ("88.8M/s"), so the paw and arrows never shift in the menu bar as the
-// numbers change; only the digits move inside their column.
-func traySpeedIcon(up, down string) []byte {
+// numbers change; only the digits move inside their column. When neither
+// system proxy nor TUN is active the paw is dimmed, matching ClashX Meta.
+func traySpeedIcon(up, down string, active bool) []byte {
 	f := trayFont()
 	up, down = strings.TrimLeft(up, " "), strings.TrimLeft(down, " ")
 	const h = 48 // full menu-bar height at 2x, no vertical margin
@@ -129,9 +130,12 @@ func traySpeedIcon(up, down string) []byte {
 	width := ringW + gap + arrowW + 2 + textW + pad
 	img := image.NewRGBA(image.Rect(0, 0, width, h))
 	textX := ringW + gap + arrowW + 2
-	black := color.NRGBA{A: 255}
-	drawPaw(img, image.Rect(0, 0, ringW, h), black)
-	ink := image.NewUniform(black)
+	pawInk := color.NRGBA{A: 255}
+	if !active {
+		pawInk.A = 110
+	}
+	drawPaw(img, image.Rect(0, 0, ringW, h), pawInk)
+	ink := image.NewUniform(color.NRGBA{A: 255})
 	drawTrayText(img, f, ink, "↑", ringW+gap+arrowW, 20)
 	drawTrayText(img, f, ink, "↓", ringW+gap+arrowW, 44)
 	drawTrayTextLeft(img, f, ink, up, textX, 20)
