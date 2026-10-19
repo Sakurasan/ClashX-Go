@@ -199,6 +199,7 @@ func (m *trayMenu) refresh(s core.State) {
 	}
 	if s.Running != m.coreRun {
 		m.coreRun = s.Running
+		m.speedTitle = "" // force the speed bitmap to redraw with the new state
 		a.updateTrayIcon(s.Running)
 	}
 	for _, g := range s.Groups {
@@ -236,15 +237,22 @@ func (m *trayMenu) findGroup(name string) *groupEntry {
 	return nil
 }
 
-// setSpeedTitle mirrors ClashX's traffic read-out next to the menu bar icon.
+// setSpeedTitle mirrors ClashX's traffic read-out: the paw plus two speed
+// lines, composed into one template bitmap (the tray title cannot show
+// two lines).
 func (m *trayMenu) setSpeedTitle(s core.State) {
-	want := ""
-	if m.app.settings.showTraffic && s.Running {
-		want = fmt.Sprintf("↓%s ↑%s", humanSpeed(s.Traffic.Down), humanSpeed(s.Traffic.Up))
+	a := m.app
+	if a.settings.showTraffic && s.Running {
+		up, down := humanSpeed(s.Traffic.Up), humanSpeed(s.Traffic.Down)
+		if key := up + "|" + down; key != m.speedTitle {
+			m.speedTitle = key
+			_ = a.tray.SetIcon(traySpeedIcon(up, down), true)
+		}
+		return
 	}
-	if want != m.speedTitle {
-		m.speedTitle = want
-		m.app.tray.SetTitle(want)
+	if m.speedTitle != "" {
+		m.speedTitle = ""
+		a.updateTrayIcon(s.Running)
 	}
 }
 
@@ -734,21 +742,19 @@ func groupsSignature(groups []*core.GroupView) string {
 	return b.String()
 }
 
-// humanSpeed follows ClashX's StatusItemView formatting: whole KB/s below
-// 1MB, two decimals below 100MB, one decimal up to 1000MB, then GB/s —
-// right-padded to a fixed 9-column field so the menu bar never jitters.
+// humanSpeed caps the readout at three digits with a single decimal:
+// 0–999K/s, 0.1–99.9M/s, then G/s (byte "B" dropped per user preference) —
+// right-padded to a fixed 9-column field so the menu title stays stable.
 func humanSpeed(n int64) string {
 	kb := n / 1024
 	var s string
 	switch {
-	case kb < 1024:
-		s = fmt.Sprintf("%dKB/s", kb)
+	case kb < 1000:
+		s = fmt.Sprintf("%dK/s", kb)
 	case kb < 100*1024:
-		s = fmt.Sprintf("%.2fMB/s", float64(kb)/1024)
-	case kb < 1000*1024:
-		s = fmt.Sprintf("%.1fMB/s", float64(kb)/1024)
+		s = fmt.Sprintf("%.1fM/s", float64(kb)/1024)
 	default:
-		s = fmt.Sprintf("%.1fGB/s", float64(kb)/1024/1024)
+		s = fmt.Sprintf("%.1fG/s", float64(kb)/1024/1024)
 	}
 	return fmt.Sprintf("%9s", s)
 }

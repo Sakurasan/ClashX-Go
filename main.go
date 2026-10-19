@@ -5,7 +5,6 @@ import (
 	"context"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"log"
 	"os"
@@ -308,22 +307,11 @@ func (a *app) show() {
 	a.win.Show()
 }
 
-// trayIcon draws a filled ring in ink on transparent, black for the
-// template (system-tinted) stopped icon.
+// trayIcon renders the paw-print mark tinted with ink on a 32px canvas —
+// black for the template (system-tinted) stopped icon.
 func trayIcon(ink color.NRGBA) []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	// Outer ring
-	for y := range 32 {
-		for x := range 32 {
-			dx, dy := x-16, y-16
-			d := dx*dx + dy*dy
-			if d <= 14*14 && d >= 7*7 {
-				img.Set(x, y, ink)
-			}
-		}
-	}
-	// Vertical gap to suggest an open proxy
-	draw.Draw(img, image.Rect(14, 8, 18, 24), image.NewUniform(color.NRGBA{A: 0}), image.Point{}, draw.Src)
+	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	drawPaw(img, img.Rect, ink)
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	return b.Bytes()
