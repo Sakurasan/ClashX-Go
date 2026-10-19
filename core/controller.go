@@ -215,7 +215,7 @@ func (c *Controller) pollLoop(ctx context.Context) {
 		refreshSub()
 	}
 	refresh()
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {

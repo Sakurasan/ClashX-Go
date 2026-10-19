@@ -146,17 +146,44 @@ func (a *app) selectProfile(name string) {
 	saveSettings(coreDir(), st)
 	a.menu.rebuild()
 	go func() {
-		mgr := a.ctrl.Manager()
-		if mgr.SubscriptionStale(p.File, core.SubscriptionMaxAge) {
-			if _, _, err := mgr.DownloadSubscription(context.Background(), p.File, p.URL, ""); err == nil {
-				p.UpdatedAt = time.Now()
-				saveSettings(coreDir(), st)
-			}
-		}
+		// Apply the stored copy first so switching is instant; a stale
+		// subscription refreshes in the background and re-applies when it
+		// lands.
 		if err := a.applyConfig(a.settingsConfig()); err != nil {
 			log.Printf("切换配置待重试: %v", err)
 		}
+		if a.ctrl.Manager().SubscriptionStale(p.File, core.SubscriptionMaxAge) {
+			if _, _, err := a.ctrl.Manager().DownloadSubscription(context.Background(), p.File, p.URL, ""); err == nil {
+				p.UpdatedAt = time.Now()
+				saveSettings(coreDir(), st)
+				if err := a.applyConfig(a.settingsConfig()); err != nil {
+					log.Printf("订阅更新后重载失败: %v", err)
+				}
+			}
+		}
 	}()
+}
+
+// refreshActiveSubIfStale updates the active subscription's stored copy in
+// the background and live-reloads it. Called after the core is up, so the
+// download goes through the proxy and startup never blocks on it.
+func (a *app) refreshActiveSubIfStale() {
+	p := a.activeSub()
+	if p == nil {
+		return
+	}
+	mgr := a.ctrl.Manager()
+	if !mgr.SubscriptionStale(p.File, core.SubscriptionMaxAge) {
+		return
+	}
+	if _, _, err := mgr.DownloadSubscription(context.Background(), p.File, p.URL, fmt.Sprintf("127.0.0.1:%d", a.mixedPort())); err != nil {
+		return
+	}
+	p.UpdatedAt = time.Now()
+	saveSettings(coreDir(), a.settings)
+	if err := a.applyConfig(a.settingsConfig()); err != nil {
+		log.Printf("订阅更新后重载失败: %v", err)
+	}
 }
 
 // selectLocalConfig activates a local config file profile (the "config"

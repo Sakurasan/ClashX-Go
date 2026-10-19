@@ -34,9 +34,11 @@ type app struct {
 
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
 	// against a still-finishing operation. userStopped marks an explicit
-	// user stop that the auto-retry loop must respect.
+	// user stop that the auto-retry loop must respect. reloadMu serialises
+	// background live reloads (a new switch waits for the previous one).
 	coreOp      sync.Mutex
 	userStopped bool
+	reloadMu    sync.Mutex
 }
 
 func main() {
@@ -194,6 +196,11 @@ func (a *app) startCoreLocked() error {
 	}
 	err := a.ctrl.Start(context.Background())
 	a.ctrl.SetSubDownloading(false)
+	if err == nil {
+		// Boot on the stored copy; a stale subscription refreshes and
+		// live-reloads in the background instead of delaying startup.
+		go a.refreshActiveSubIfStale()
+	}
 	return err
 }
 
@@ -214,33 +221,55 @@ func (a *app) applyConfig(cfg core.Config) error {
 	old := a.ctrl.CurrentConfig()
 	if a.ctrl.State().Running && cfg.ControllerPort == old.ControllerPort && cfg.Secret == old.Secret {
 		cfg.Mode = a.ctrl.State().Mode // keep the live mode across the reload
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := a.ctrl.ReloadConfig(ctx, cfg)
-		cancel()
-		if err == nil {
-			// ClashX closes established chains after a config change so
-			// new routing applies immediately to persistent connections.
-			go a.closeConnections()
-			return nil
-		}
-		log.Printf("live reload failed, restarting core: %v", err)
+		go a.reloadLive(cfg)
+		return nil
 	}
 	return a.restartCore(cfg)
+}
+
+// reloadLive applies the config in the background. mihomo's PUT /configs
+// blocks until rule/proxy providers finish initialising (seconds when they
+// pull from the network) while the old routing keeps serving, so waiting
+// on it in the caller made every switch feel slow. A failed reload falls
+// back to a process restart.
+func (a *app) reloadLive(cfg core.Config) {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	startedAt := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	err := a.ctrl.ReloadConfig(ctx, cfg)
+	cancel()
+	if err != nil {
+		if a.quitting || a.userStopped || !a.ctrl.Manager().Running() {
+			return
+		}
+		log.Printf("live reload failed, restarting core: %v", err)
+		if rerr := a.restartCore(cfg); rerr != nil {
+			log.Printf("restart after failed reload: %v", rerr)
+		}
+		return
+	}
+	log.Printf("live reload in %s", time.Since(startedAt).Round(time.Millisecond))
+	// ClashX closes established chains after a config change so new
+	// routing applies immediately to persistent connections.
+	go a.closeConnections()
 }
 
 // restartCore stops the old controller config and starts a new one.
 func (a *app) restartCore(cfg core.Config) error {
 	a.coreOp.Lock()
 	defer a.coreOp.Unlock()
+	startedAt := time.Now()
 	a.ctrl.Stop()
 	a.ctrl = core.NewController(a.ctrl.Manager(), cfg)
 	a.ctrl.OnChange(a.onState)
 	if err := a.ctrl.Start(context.Background()); err != nil {
-		// A killed TUN core can take tens of seconds to release its port
-		// while the kernel tears the interface down. Retry quietly after a
-		// grace period; only a retry that also fails bothers the user.
+		// A killed TUN core can take a moment to release its port while the
+		// kernel tears the interface down; Start already waits for the port,
+		// so retry almost immediately and only bother the user if that
+		// retry also fails.
 		go func() {
-			time.Sleep(6 * time.Second)
+			time.Sleep(300 * time.Millisecond)
 			if a.quitting || a.userStopped || a.ctrl.Manager().Running() {
 				return
 			}
@@ -248,6 +277,7 @@ func (a *app) restartCore(cfg core.Config) error {
 		}()
 		return err
 	}
+	log.Printf("core restarted in %s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 

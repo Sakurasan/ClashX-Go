@@ -192,8 +192,13 @@ func bundledBinary() string {
 // falls back to an http provider only if the download fails.
 func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (string, error) {
 	// Download the subscription before taking the lock: no shared state.
+	// A local copy — even an old one — boots immediately; the app refreshes
+	// stale subscriptions in the background so startup never waits on the
+	// network.
 	if cfg.ConfigPath == "" && cfg.SubscriptionURL != "" {
-		_ = m.ensureSubscription(ctx, cfg)
+		if fi, err := os.Stat(m.subscriptionPath(cfg.subFile())); err != nil || fi.Size() == 0 {
+			_ = m.ensureSubscription(ctx, cfg)
+		}
 	}
 
 	m.mu.Lock()
@@ -285,6 +290,7 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 		m.mu.Unlock()
 		return "", fmt.Errorf("start mihomo: %w", err)
 	}
+	spawnedAt := time.Now()
 	procPID = cmd.Process.Pid
 	go func() { exited <- cmd.Wait() }()
 	m.cmd = cmd
@@ -308,6 +314,8 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 					return "", err
 				}
 			}
+			fmt.Fprintf(os.Stderr, "core ready in %s (pid %d)\n",
+				time.Since(spawnedAt).Round(time.Millisecond), procPID)
 			return configPath, nil
 		}
 		select {
@@ -318,7 +326,7 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 			// Leave the buffered error for Stop to consume.
 			m.Stop()
 			return "", fmt.Errorf("核心进程提前退出%s", coreLogTail(filepath.Join(m.dir, "core.log")))
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(40 * time.Millisecond):
 		}
 	}
 	m.Stop()
@@ -387,29 +395,37 @@ func sameBinary(a, b string) bool {
 	return bytes.Equal(sa.Sum(nil), sb.Sum(nil))
 }
 
-// checkTUNReady waits briefly after the core answers and rejects a start
-// whose log tail reports the TUN device failing to come up.
+// checkTUNReady watches the new log tail for the TUN result instead of
+// sleeping a fixed grace period: mihomo announces either
+// "[TUN] Tun adapter listening at:" or "Start TUN listening error" within a
+// few hundred milliseconds, so a successful switch returns immediately.
 func checkTUNReady(logPath string, offset int64) error {
-	time.Sleep(2 * time.Second)
-	f, err := os.Open(logPath)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	if offset > 0 {
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for {
+		f, err := os.Open(logPath)
+		if err == nil {
+			if offset > 0 {
+				_, _ = f.Seek(offset, io.SeekStart)
+			}
+			tail, _ := io.ReadAll(io.LimitReader(f, 64<<10))
+			f.Close()
+			if i := bytes.Index(tail, []byte("Start TUN listening error")); i >= 0 {
+				line := tail[i:]
+				if j := bytes.IndexByte(line, '\n'); j > 0 {
+					line = line[:j]
+				}
+				return fmt.Errorf("TUN 设备创建失败：%s", strings.TrimSpace(string(line)))
+			}
+			if bytes.Contains(tail, []byte("[TUN] Tun adapter listening at:")) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			// No verdict in the log: don't fail a core that is answering.
 			return nil
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	tail, _ := io.ReadAll(io.LimitReader(f, 64<<10))
-	if i := bytes.Index(tail, []byte("Start TUN listening error")); i >= 0 {
-		line := tail[i:]
-		if j := bytes.IndexByte(line, '\n'); j > 0 {
-			line = line[:j]
-		}
-		return fmt.Errorf("TUN 设备创建失败：%s", strings.TrimSpace(string(line)))
-	}
-	return nil
 }
 
 // coreLogTail quotes the last lines of the core log for startup errors.
@@ -446,7 +462,7 @@ func (m *Manager) Stop() {
 	if exit != nil {
 		select {
 		case <-exit:
-		case <-time.After(1 * time.Second):
+		case <-time.After(300 * time.Millisecond):
 			// Graceful drain can hang for tens of seconds with busy
 			// keep-alives and TUN teardown; a restart must not wait for it.
 			// SIGKILL is reaped by the Wait goroutine, and Start's port
@@ -508,7 +524,7 @@ func waitPortFree(port int, timeout time.Duration) bool {
 		if time.Now().After(deadline) {
 			return false
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
