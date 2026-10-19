@@ -1,0 +1,167 @@
+package main
+
+import (
+	"bytes"
+	"image/png"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+
+	"clashx-go/core"
+)
+
+// The panel view runs without a window in tests. The core is stopped, so
+// the Overview tab shows the Start button and the footer a Start button;
+// both call startCore which errors without a real core, so we only assert
+// the rendered text.
+func testApp(t *testing.T) *app {
+	t.Helper()
+	mgr, err := core.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{
+		settings: &settings{mixedPort: "7890", controller: "9090"},
+		ctrl:     core.NewController(mgr, core.DefaultConfig()),
+	}
+	return a
+}
+
+// TestPanelSettings exercises the settings window, which renders without the
+// core running and needs no controller endpoints to build.
+func TestPanelSettings(t *testing.T) {
+	a := testApp(t)
+	p := &panelApp{app: a}
+	tt := ui.NewTester(p.view, 520, 720)
+	for _, tab := range []string{"通用", "全局快捷键", "调试", "Meta"} {
+		if !tt.HasText(tab) {
+			t.Errorf("tab %q missing, texts %q", tab, tt.Texts())
+		}
+	}
+	if !tt.HasText("代理端口") {
+		t.Errorf("mixed port field missing, texts %q", tt.Texts())
+	}
+	if !tt.HasText("保存并重启核心") {
+		t.Errorf("save button missing, texts %q", tt.Texts())
+	}
+	for _, want := range []string{"启用 IPv6", "允许局域网控制（不推荐）", "代理延迟测试地址", "在特定 WiFi SSID 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "重置"} {
+		if !tt.HasText(want) {
+			t.Errorf("meta general setting %q missing, texts %q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("概览") || tt.HasText("暂无策略组。") {
+		t.Errorf("legacy panel panes still rendered, texts %q", tt.Texts())
+	}
+}
+
+// TestPanelTabs renders the shortcuts, debug and Meta tabs.
+func TestPanelTabs(t *testing.T) {
+	a := testApp(t)
+	for tab, want := range map[int]string{
+		tabShortcuts: "系统代理",
+		tabDebug:     "还原系统代理",
+		tabMeta:      "Meta Core: " + core.CoreVersion,
+	} {
+		p := &panelApp{app: a, tab: tab}
+		tt := ui.NewTester(p.view, 520, 720)
+		if !tt.HasText(want) {
+			t.Errorf("tab %d missing %q, texts %q", tab, want, tt.Texts())
+		}
+	}
+}
+
+// TestTrayMenu exercises the ClashX-style menu build and its in-place
+// refresh: selections and delays update items without a rebuild.
+func TestTrayMenu(t *testing.T) {
+	a := testApp(t)
+	m := &trayMenu{app: a}
+	s := core.State{Mode: "rule", Groups: []*core.GroupView{{
+		Name: "PROXY", Current: "HK", Members: []string{"HK", "US"},
+		Delays: map[string]int{"US": -1},
+	}}}
+	m.build(s)
+	if got := m.modeItem.Label; got != "出站模式 (规则)" {
+		t.Errorf("mode label = %q", got)
+	}
+	ge := m.groups[0]
+	if !ge.members["HK"].IsChecked() || ge.members["US"].IsChecked() {
+		t.Error("initial member checks wrong")
+	}
+	if got := ge.members["US"].Label; got != "US  ❌  失败" {
+		t.Errorf("timeout member label = %q", got)
+	}
+
+	s2 := core.State{Mode: "global", Groups: []*core.GroupView{{
+		Name: "PROXY", Current: "US", Members: []string{"HK", "US"},
+		Delays: map[string]int{"US": 210},
+	}}}
+	m.refresh(s2)
+	if got := m.modeItem.Label; got != "出站模式 (全局)" {
+		t.Errorf("mode label after refresh = %q", got)
+	}
+	if !ge.members["US"].IsChecked() || ge.members["HK"].IsChecked() {
+		t.Error("member checks not refreshed")
+	}
+	if got := ge.members["US"].Label; got != "US  ✅  210 ms" {
+		t.Errorf("delay label = %q", got)
+	}
+	if got := ge.item.Label; got != "PROXY  (US)" {
+		t.Errorf("group label = %q", got)
+	}
+}
+
+func TestAboutView(t *testing.T) {
+	tt := ui.NewTester(aboutView, 420, 420)
+	for _, want := range []string{"ClashX Go", "版本: 0.1.0", "Meta Core: " + core.CoreVersion, "GitHub for Clash Meta"} {
+		if !tt.HasText(want) {
+			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestHumanSpeed(t *testing.T) {
+	cases := []struct {
+		n    int64
+		want string
+	}{
+		{512, "     0K/s"},
+		{47206, "    46K/s"},
+		{999 * 1024, "   999K/s"},
+		{1024 * 1024, "   1.0M/s"},
+		{150 * 1024 * 1024, "   0.1G/s"},
+		{2 * 1024 * 1024 * 1024, "   2.0G/s"},
+	}
+	for _, c := range cases {
+		if got := humanSpeed(c.n); got != c.want {
+			t.Errorf("humanSpeed(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+// The paw is drawn at full ink when the proxy is active and dimmed (still
+// visible, like ClashX Meta's disabled tint) when it is not.
+func TestTraySpeedIconDimState(t *testing.T) {
+	maxAlpha := func(active bool) uint8 {
+		img, err := png.Decode(bytes.NewReader(traySpeedIcon("3K/s", "9.9M/s", active)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m uint8
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < 46; x++ { // paw column only
+				_, _, _, a := img.At(x, y).RGBA()
+				if v := uint8(a >> 8); v > m {
+					m = v
+				}
+			}
+		}
+		return m
+	}
+	if got := maxAlpha(true); got != 255 {
+		t.Errorf("active paw alpha = %d, want 255", got)
+	}
+	if got := maxAlpha(false); got != 110 {
+		t.Errorf("inactive paw alpha = %d, want 110", got)
+	}
+}

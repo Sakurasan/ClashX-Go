@@ -1,0 +1,718 @@
+package core
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/egoist/mygo"
+)
+
+// CoreVersion is the mihomo release to download when the binary is missing.
+const CoreVersion = "v1.19.32"
+
+// binaryName returns the extracted executable name.
+func binaryName() string {
+	if runtime.GOOS == "windows" {
+		return "mihomo.exe"
+	}
+	return "mihomo"
+}
+
+// Manager owns the mihomo process: its binary, its config directory and
+// its lifecycle. All methods are safe for concurrent use.
+type Manager struct {
+	dir string // working directory (config.yaml + downloaded binary live here)
+
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	exitCh     chan error // receives cmd.Wait() once the process is up
+	procPID    int
+	running    bool
+	privileged bool // core runs from the setuid copy (TUN hot-switchable)
+}
+
+// NewManager returns a Manager rooted at dir, creating it if needed.
+func NewManager(dir string) (*Manager, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return &Manager{dir: dir}, nil
+}
+
+// Dir returns the working directory.
+func (m *Manager) Dir() string { return m.dir }
+
+// Binary returns the path of the core executable.
+func (m *Manager) Binary() string { return filepath.Join(m.dir, binaryName()) }
+
+// EnsureBinary ensures the core executable for the host exists in the
+// Manager's directory, copying it from the app's bundled resources (the
+// core is downloaded at build time by scripts/fetch-cores.sh, never at
+// runtime). It also copies the bundled GeoIP database when present, so
+// first launch needs no network. It reports the core version.
+func (m *Manager) EnsureBinary() (string, error) {
+	bin := m.Binary()
+	if _, err := os.Stat(bin); err == nil {
+		return CoreVersion, nil
+	}
+	res := bundledBinary()
+	if res == "" {
+		return "", fmt.Errorf("no bundled mihomo for %s/%s in resources", runtime.GOOS, runtime.GOARCH)
+	}
+	if err := copyFile(res, bin); err != nil {
+		return "", err
+	}
+	// GeoIP database: copy it when bundled (exists in resources/geoip.metadb
+	// or resources/darwin-<arch>/geoip.metadb).
+	for _, cand := range bundledGeoIPCandidates() {
+		if err := copyFile(cand, filepath.Join(m.dir, filepath.Base(cand))); err != nil {
+			// The database is optional — a subscription config without
+			// GEOIP rules still works; only log and continue.
+			continue
+		}
+		break
+	}
+	return CoreVersion, nil
+}
+
+// copyFile copies src to dest with 0755 permissions, atomically via a tmp
+// file.
+func copyFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(dest+".tmp", 0o755); err != nil {
+		return err
+	}
+	return os.Rename(dest+".tmp", dest)
+}
+
+// bundledGeoIPCandidates returns possible bundled geoip.metadb paths.
+func bundledGeoIPCandidates() []string {
+	var out []string
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		for _, sub := range []string{"geoip.metadb", "darwin-" + runtime.GOARCH + "/geoip.metadb", runtime.GOARCH + "/geoip.metadb"} {
+			out = append(out, filepath.Join(dir, sub))
+		}
+	}
+	if dir, err := mygo.App.Path(mygo.PathResources); err == nil {
+		add(dir)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		for d := wd; ; d = filepath.Dir(d) {
+			if filepath.Base(d) == "resources" {
+				break
+			}
+			add(filepath.Join(d, "resources"))
+			parent := filepath.Dir(d)
+			if parent == d {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// bundledBinary returns the path of the core binary bundled in the app's
+// resources for the running architecture, or "" when absent. The resources
+// directory is Contents/Resources in a packaged app and the project's
+// resources directory under `go run`/`go test`, with the platform
+// subdirectories (darwin-arm64, darwin-amd64) merged in by mygo build for
+// darwin/universal. Under `go test` run from a sub-package the working
+// directory is the package dir, so we also walk up to the module root's
+// resources dir.
+// resourceDirs lists where bundled resources may live: the app bundle's
+// Resources directory, or a resources/ directory above the working dir (the
+// source checkout, and package tests run from a subdirectory).
+func resourceDirs() []string {
+	var dirs []string
+	if dir, err := mygo.App.Path(mygo.PathResources); err == nil && dir != "" {
+		dirs = append(dirs, dir)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		for d := wd; ; d = filepath.Dir(d) {
+			if filepath.Base(d) == "resources" {
+				break
+			}
+			dirs = append(dirs, filepath.Join(d, "resources"))
+			parent := filepath.Dir(d)
+			if parent == d {
+				break
+			}
+		}
+	}
+	return dirs
+}
+
+func bundledBinary() string {
+	for _, dir := range resourceDirs() {
+		// mygo build flattens the platform directory (resources/darwin-<arch>)
+		// into Contents/Resources for single-platform builds, and keeps the
+		// platform subdirectories for darwin/universal. Try every layout.
+		for _, sub := range []string{"darwin-" + runtime.GOARCH, runtime.GOARCH, ""} {
+			p := filepath.Join(dir, sub, "mihomo")
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// ensureDashboard copies the bundled web dashboard into the working
+// directory on first launch so mihomo can serve it at /ui. Bundles built
+// without resources/dashboard keep falling back to the settings window.
+func (m *Manager) ensureDashboard() {
+	dest := filepath.Join(m.dir, "dashboard")
+	if _, err := os.Stat(filepath.Join(dest, "index.html")); err == nil {
+		return
+	}
+	for _, dir := range resourceDirs() {
+		src := filepath.Join(dir, "dashboard")
+		if _, err := os.Stat(filepath.Join(src, "index.html")); err != nil {
+			continue
+		}
+		if err := os.CopyFS(dest, os.DirFS(src)); err != nil {
+			fmt.Fprintf(os.Stderr, "dashboard copy failed: %v\n", err)
+		}
+		return
+	}
+}
+
+// Start launches mihomo with the given config, waiting until its external
+// controller answers or the process exits. When the user supplied a
+// profile (ConfigPath), it is used as the config file and our controller
+// endpoint and secret are overridden via -ext-ctl/-secret; otherwise a
+// runtime config.yaml is generated. When a subscription is configured, the
+// app downloads it first (via ensureSubscription) so the core reads a
+// local file provider rather than reaching the host itself — the config
+// falls back to an http provider only if the download fails.
+func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (string, error) {
+	// Download the subscription before taking the lock: no shared state.
+	// A local copy — even an old one — boots immediately; the app refreshes
+	// stale subscriptions in the background so startup never waits on the
+	// network.
+	if cfg.ConfigPath == "" && cfg.SubscriptionURL != "" {
+		if fi, err := os.Stat(m.subscriptionPath(cfg.subFile())); err != nil || fi.Size() == 0 {
+			_ = m.ensureSubscription(ctx, cfg)
+		}
+	}
+
+	m.mu.Lock()
+	if m.running {
+		m.mu.Unlock()
+		return "", fmt.Errorf("core is already running")
+	}
+	m.killStale()
+	// The web dashboard ships in the bundle; copy it into the working dir
+	// before the external-ui check below (first launch of a fresh install).
+	m.ensureDashboard()
+	// The controller port is ours to bind (we pass -ext-ctl). If another
+	// Clash core already owns it, mihomo would start half-dead and our
+	// ping would answer from the foreign core: fail early instead. A core
+	// we just stopped drains its connections before exiting, so allow a
+	// generous window for the port to come free.
+	if cfg.ControllerPort > 0 && !waitPortFree(cfg.ControllerPort, 20*time.Second) {
+		m.mu.Unlock()
+		return "", fmt.Errorf("端口 %d 已被 %s 占用，请在偏好设置里换一个控制器端口", cfg.ControllerPort, portHolder(cfg.ControllerPort))
+	}
+	bin := m.Binary()
+	if _, err := os.Stat(bin); err != nil {
+		m.mu.Unlock()
+		return "", fmt.Errorf("core binary missing: %w", err)
+	}
+	for _, ui := range []string{"dashboard", "ui"} {
+		if fi, err := os.Stat(filepath.Join(m.dir, ui, "index.html")); err == nil && !fi.IsDir() {
+			cfg.ExternalUI = ui
+			break
+		}
+	}
+	// Boot with the minimal bootstrap config (endpoints, TUN, DIRECT
+	// catch-all); the app pushes the real config over the API as soon as
+	// the controller answers, like ClashX Meta.
+	configPath, err := cfg.WriteBootstrapYAML(m.dir)
+	if err != nil {
+		m.mu.Unlock()
+		return "", err
+	}
+	args := []string{"-d", m.dir, "-f", configPath}
+	if cfg.ControllerPort > 0 {
+		args = append(args, "-ext-ctl", fmt.Sprintf("127.0.0.1:%d", cfg.ControllerPort))
+	}
+	if cfg.Secret != "" {
+		args = append(args, "-secret", cfg.Secret)
+	}
+	exited := make(chan error, 1)
+	var cmd *exec.Cmd
+	var procPID int
+	logPath := filepath.Join(m.dir, "core.log")
+	var logOffset int64
+	if fi, err := os.Stat(logPath); err == nil {
+		logOffset = fi.Size()
+	}
+	privileged := false
+	if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+		switch {
+		case cfg.TUN:
+			// TUN needs root to open a utun device. Run a one-time
+			// installed root-owned setuid copy of the core; afterwards
+			// starting TUN asks for no password.
+			fmt.Fprintf(os.Stderr, "TUN：检查提权内核 %s\n", privilegedCorePath())
+			priv, err := m.privilegedCore(bin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "TUN：提权组件不可用: %v\n", err)
+				m.mu.Unlock()
+				return "", err
+			}
+			fmt.Fprintf(os.Stderr, "TUN：提权内核就绪 %s\n", priv)
+			bin, privileged = priv, true
+		case sameBinary(bin, privilegedCorePath()) && privilegedCoreReady(privilegedCorePath()):
+			// The component is already authorised: keep using it even with
+			// TUN off so later toggles stay a hot API patch, never a restart.
+			bin, privileged = privilegedCorePath(), true
+		}
+	}
+	cmd = exec.Command(bin, args...)
+	cmd.Dir = m.dir
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		m.mu.Unlock()
+		return "", err
+	}
+	cmd.Stdout = logf
+	cmd.Stderr = logf
+	if err := cmd.Start(); err != nil {
+		m.mu.Unlock()
+		return "", fmt.Errorf("start mihomo: %w", err)
+	}
+	spawnedAt := time.Now()
+	procPID = cmd.Process.Pid
+	go func() { exited <- cmd.Wait() }()
+	m.cmd = cmd
+	m.privileged = privileged
+	m.procPID = procPID
+	m.running = true
+	m.exitCh = exited
+	m.mu.Unlock()
+	_ = os.WriteFile(m.pidPath(), []byte(strconv.Itoa(procPID)), 0o644)
+
+	// Watch for process exit so a core that dies during startup fails fast
+	// with the log tail instead of timing out.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if ping() == nil {
+			if cfg.TUN {
+				// mihomo logs a TUN failure but keeps running without it:
+				// treat that as a failed start so the switch rolls back.
+				if err := checkTUNReady(logPath, logOffset); err != nil {
+					m.Stop()
+					return "", err
+				}
+			}
+			fmt.Fprintf(os.Stderr, "core ready in %s (pid %d)\n",
+				time.Since(spawnedAt).Round(time.Millisecond), procPID)
+			return configPath, nil
+		}
+		select {
+		case <-ctx.Done():
+			m.Stop()
+			return "", ctx.Err()
+		case <-exited:
+			// Leave the buffered error for Stop to consume.
+			m.Stop()
+			return "", fmt.Errorf("核心进程提前退出%s", coreLogTail(filepath.Join(m.dir, "core.log")))
+		case <-time.After(40 * time.Millisecond):
+		}
+	}
+	m.Stop()
+	return "", fmt.Errorf("core did not answer on the controller within 15s")
+}
+
+// stopFlag asks a legacy watcher (pre-setuid installs) to terminate an
+// orphaned root core without another administrator prompt.
+func (m *Manager) stopFlag() string { return filepath.Join(m.dir, "core.stop") }
+
+// privilegedDir is where the root-owned setuid core copy lives.
+const privilegedDir = "/Library/Application Support/clashx-go"
+
+func privilegedCorePath() string { return filepath.Join(privilegedDir, binaryName()) }
+
+// privilegedCore installs or refreshes the setuid copy of the core used for
+// TUN. The administrator prompt appears only the first time, or after the
+// bundled core changed (hash mismatch / missing setuid bit).
+func (m *Manager) privilegedCore(bin string) (string, error) {
+	dest := privilegedCorePath()
+	if sameBinary(bin, dest) && privilegedCoreReady(dest) {
+		return dest, nil
+	}
+	inner := fmt.Sprintf("mkdir -p %s && cp %s %s && chown -R root:wheel %s && chmod 4755 %s",
+		strconv.Quote(privilegedDir), strconv.Quote(bin), strconv.Quote(dest),
+		strconv.Quote(privilegedDir), strconv.Quote(dest))
+	scriptPath := filepath.Join(m.dir, "tun_install.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\n"+inner+"\n"), 0o700); err != nil {
+		return "", err
+	}
+	out, err := exec.Command("osascript", "-e",
+		fmt.Sprintf(`do shell script "/bin/sh '%s' " with administrator privileges with prompt "ClashX Go 正在安装 TUN 提权组件（仅需一次，之后开启 TUN 不再询问密码）。"`,
+			scriptPath)).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "-128") {
+			return "", fmt.Errorf("已取消管理员授权")
+		}
+		return "", fmt.Errorf("安装 TUN 提权组件失败: %s", msg)
+	}
+	if !sameBinary(bin, dest) || !privilegedCoreReady(dest) {
+		return "", fmt.Errorf("TUN 提权组件安装校验失败")
+	}
+	return dest, nil
+}
+
+// privilegedCoreReady reports whether path is the root-owned setuid copy.
+// Checking the bytes alone is not enough: a stale copy owned by the user
+// (or with the setuid bit stripped) cannot open a utun, and reusing it
+// silently skips the authorization prompt.
+func privilegedCoreReady(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 {
+		return false
+	}
+	return fi.Mode()&os.ModeSetuid != 0
+}
+
+// sameBinary reports whether two files have identical bytes.
+func sameBinary(a, b string) bool {
+	fa, err := os.Open(a)
+	if err != nil {
+		return false
+	}
+	defer fa.Close()
+	fb, err := os.Open(b)
+	if err != nil {
+		return false
+	}
+	defer fb.Close()
+	sa, sb := sha256.New(), sha256.New()
+	if _, err := io.Copy(sa, fa); err != nil {
+		return false
+	}
+	if _, err := io.Copy(sb, fb); err != nil {
+		return false
+	}
+	return bytes.Equal(sa.Sum(nil), sb.Sum(nil))
+}
+
+// checkTUNReady watches the new log tail for the TUN result instead of
+// sleeping a fixed grace period: mihomo announces either
+// "[TUN] Tun adapter listening at:" or "Start TUN listening error" within a
+// few hundred milliseconds, so a successful switch returns immediately.
+func checkTUNReady(logPath string, offset int64) error {
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for {
+		f, err := os.Open(logPath)
+		if err == nil {
+			if offset > 0 {
+				_, _ = f.Seek(offset, io.SeekStart)
+			}
+			tail, _ := io.ReadAll(io.LimitReader(f, 64<<10))
+			f.Close()
+			if i := bytes.Index(tail, []byte("Start TUN listening error")); i >= 0 {
+				line := tail[i:]
+				if j := bytes.IndexByte(line, '\n'); j > 0 {
+					line = line[:j]
+				}
+				return fmt.Errorf("TUN 设备创建失败：%s", strings.TrimSpace(string(line)))
+			}
+			if bytes.Contains(tail, []byte("[TUN] Tun adapter listening at:")) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			// No verdict in the log: don't fail a core that is answering.
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// coreLogTail quotes the last lines of the core log for startup errors.
+func coreLogTail(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	const max = 400
+	if len(data) > max {
+		data = data[len(data)-max:]
+		if i := strings.IndexByte(string(data), '\n'); i >= 0 && i < len(data)-1 {
+			data = data[i+1:]
+		}
+	}
+	return "\n" + strings.TrimSpace(string(data))
+}
+
+// Stop terminates the mihomo process, waiting for it to exit.
+func (m *Manager) Stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.running {
+		return
+	}
+	// Send SIGTERM first, then SIGKILL after a grace period. The startup
+	// watcher goroutine delivers the real exit to exitCh; Stop must not
+	// call cmd.Wait itself. A setuid core keeps the user's real uid, so
+	// signalling it needs no privilege.
+	exit := m.exitCh
+	if m.cmd != nil && m.cmd.Process != nil {
+		_ = m.cmd.Process.Signal(os.Interrupt)
+	}
+	if exit != nil {
+		select {
+		case <-exit:
+		case <-time.After(300 * time.Millisecond):
+			// Graceful drain can hang for tens of seconds with busy
+			// keep-alives and TUN teardown; a restart must not wait for it.
+			// SIGKILL is reaped by the Wait goroutine, and Start's port
+			// wait absorbs the kernel-side socket release.
+			if m.cmd != nil && m.cmd.Process != nil {
+				_ = m.cmd.Process.Kill()
+			}
+			<-exit
+		}
+	}
+	m.running = false
+	m.cmd = nil
+	m.privileged = false
+	m.exitCh = nil
+	os.Remove(m.pidPath())
+}
+
+// pidPath is where the core's process id is stored so a later run can clean
+// up a core orphaned by a killed app (SIGKILL skips OnWillQuit).
+func (m *Manager) pidPath() string { return filepath.Join(m.dir, "core.pid") }
+
+// PortAvailable reports whether a localhost TCP port can be bound.
+func PortAvailable(port int) bool { return portAvailable(port) }
+
+// PortListening reports whether something accepts TCP connections on
+// 127.0.0.1:port — used to catch a mixed port that another proxy owns.
+func PortListening(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// NextFreePort returns the first bindable port from start upwards, or start
+// when none is found.
+func NextFreePort(start int) int {
+	for p := start; p < 65535; p++ {
+		if portAvailable(p) {
+			return p
+		}
+	}
+	return start
+}
+
+// portAvailable reports whether a TCP port can be bound on localhost.
+func portAvailable(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+// portHolder names the process listening on a TCP port, for error text.
+func portHolder(port int) string {
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+fmt.Sprint(port), "-sTCP:LISTEN", "-Fpcn").Output()
+	if err != nil || len(out) == 0 {
+		return "其他进程"
+	}
+	var name, pid string
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(line, "p"); ok && pid == "" {
+			pid = v
+		} else if v, ok := strings.CutPrefix(line, "c"); ok && name == "" {
+			name = v
+		}
+	}
+	if name == "" {
+		return "其他进程"
+	}
+	return name + " (pid " + pid + ")"
+}
+
+// waitPortFree polls portAvailable until it succeeds or timeout passes.
+func waitPortFree(port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if portAvailable(port) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// killStale terminates a core left over from a previous run.
+func (m *Manager) killStale() {
+	data, err := os.ReadFile(m.pidPath())
+	os.Remove(m.pidPath())
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if !errors.Is(err, syscall.EPERM) {
+			return // already gone
+		}
+		// Root-owned leftover from an elevated TUN run: signal its watcher
+		// through the stop flag instead of killing directly.
+		_ = os.WriteFile(m.stopFlag(), nil, 0o644)
+		for range 20 {
+			time.Sleep(250 * time.Millisecond)
+			if proc.Signal(syscall.Signal(0)) != nil {
+				return
+			}
+		}
+		return
+	}
+	_ = proc.Signal(os.Interrupt)
+	for range 25 {
+		time.Sleep(200 * time.Millisecond)
+		if proc.Signal(syscall.Signal(0)) != nil {
+			return
+		}
+	}
+	_ = proc.Kill()
+}
+
+// Privileged reports whether the running core is the setuid copy, i.e.
+// whether TUN can be toggled at runtime without a restart.
+func (m *Manager) Privileged() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.privileged && m.running
+}
+
+// LogSize returns the current size of core.log, for scanning only new lines.
+func (m *Manager) LogSize() int64 {
+	fi, err := os.Stat(filepath.Join(m.dir, "core.log"))
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// TUNErrorAfter reports a TUN failure logged after offset, waiting briefly
+// for mihomo to notice it cannot open the device.
+func (m *Manager) TUNErrorAfter(offset int64) error {
+	return checkTUNReady(filepath.Join(m.dir, "core.log"), offset)
+}
+
+// Running reports whether the process is currently up.
+func (m *Manager) Running() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running
+}
+
+// SubscriptionMaxAge is how long a downloaded subscription is reused
+// before Start fetches a fresh copy.
+const SubscriptionMaxAge = time.Hour
+
+// ensureSubscription re-downloads the subscription when the stored copy is
+// missing or older than SubscriptionMaxAge. A failed download is
+// non-fatal: the config then falls back to an http provider that mihomo
+// fetches itself.
+func (m *Manager) ensureSubscription(ctx context.Context, cfg Config) error {
+	p := m.subscriptionPath(cfg.subFile())
+	if fi, err := os.Stat(p); err == nil && time.Since(fi.ModTime()) < SubscriptionMaxAge {
+		return nil
+	}
+	// If the core is already up, route the download through its mixed port
+	// so the subscription fetch itself is proxied.
+	proxy := ""
+	if m.Running() {
+		proxy = fmt.Sprintf("127.0.0.1:%d", cfg.MixedPort)
+	}
+	n, _, err := m.DownloadSubscription(ctx, cfg.subFile(), cfg.SubscriptionURL, proxy)
+	if err != nil {
+		// Log for diagnosis; keep the old copy.
+		fmt.Fprintf(os.Stderr, "subscription download failed: %v\n", err)
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "subscription: downloaded %d proxies\n", n)
+	return nil
+}
+
+// RefreshSubscription forces a re-download regardless of the stored copy's
+// age, routing through the running core's mixed port when it is up so the
+// fetch itself is proxied. It returns the new proxy count and the provider's
+// suggested profile title.
+func (m *Manager) RefreshSubscription(ctx context.Context, cfg Config) (int, string, error) {
+	proxy := ""
+	if m.Running() {
+		proxy = fmt.Sprintf("127.0.0.1:%d", cfg.MixedPort)
+	}
+	return m.DownloadSubscription(ctx, cfg.subFile(), cfg.SubscriptionURL, proxy)
+}
+
+// ReloadConfig writes cfg to disk (overlay or generated) and returns the
+// file the running core should pick up via Client.Reload.
+func (m *Manager) ReloadConfig(cfg Config) (string, error) {
+	return runtimeConfigPath(m.dir, cfg)
+}
+
+// LogPath returns where the core writes its stdout/stderr.
+func (m *Manager) LogPath() string { return filepath.Join(m.dir, "core.log") }
+
+// ErrNotRunning is returned when an API call needs a live core.
+var ErrNotRunning = fmt.Errorf("core is not running")

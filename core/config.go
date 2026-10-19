@@ -1,0 +1,311 @@
+package core
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// Config describes the Clash/Mihomo core runtime configuration. The app
+// writes a runtime config.yaml for the external-controller and the mixed
+// port, then lets the core manage proxies, DNS and rules.
+type Config struct {
+	// MixedPort is the mixed HTTP/SOCKS5 listen port.
+	MixedPort int `json:"mixed-port"`
+	// ControllerPort is the external-controller listen port.
+	ControllerPort int `json:"controller-port"`
+	// Secret is the external-controller API bearer secret.
+	Secret string `json:"secret"`
+	// Mode is the running mode: rule, global, or direct.
+	Mode string `json:"mode"`
+	// ConfigPath is the user's config/profile YAML to load, if any.
+	ConfigPath string `json:"config-path"`
+	// SubscriptionURL, when set, activates the downloaded subscription. A
+	// full Clash config (one that declares proxy-groups) is used as-is with
+	// the app-managed keys overlaid, so the provider's own groups, rules
+	// and DNS survive; a provider-style node list gets a generated config
+	// with a file provider pointing at the local copy.
+	SubscriptionURL string `json:"subscription-url"`
+	// SubscriptionFile overrides the downloaded-subscription file name
+	// (default SubscriptionFile). Managed profiles each keep their own.
+	SubscriptionFile string `json:"subscription-file"`
+	// AllowLAN lets devices on the local network use the mixed port.
+	AllowLAN bool `json:"allow-lan"`
+	// ExternalUI is a directory (relative to the working dir) served at
+	// /ui by the controller — the bundled dashboard for the 控制台 item.
+	ExternalUI string `json:"external-ui,omitempty"`
+	// TUN enables the core's TUN interface. Opening the device needs
+	// administrator rights; without them the core exits at startup.
+	TUN bool `json:"tun"`
+	// IPv6 enables IPv6 in the core runtime config.
+	IPv6 bool `json:"ipv6"`
+	// BenchmarkURL is the URL used for per-node latency tests.
+	BenchmarkURL string `json:"benchmark-url"`
+}
+
+// DefaultConfig returns the settings used on first launch.
+func DefaultConfig() Config {
+	return Config{
+		MixedPort:      7890,
+		ControllerPort: 9090,
+		Mode:           "rule",
+	}
+}
+
+// subFile returns the subscription file name this config uses.
+func (c Config) subFile() string {
+	if c.SubscriptionFile != "" {
+		return c.SubscriptionFile
+	}
+	return SubscriptionFile
+}
+
+// flowNameRE extracts the name from a flow-style group entry,
+// e.g. `- {name: 节点选择, type: select, …}`.
+var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*,`)
+
+// runningOverrideKeys are top-level keys the app owns: the settings panel
+// and menu toggles win over whatever the user's profile declares.
+var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "tun", "external-ui"}
+
+// writeRunningConfig copies a user profile to dest, stripping its
+// app-managed keys (including whole mapping blocks like tun:) and
+// prepending ours, so the 端口设置/局域网/Tun toggles take effect exactly
+// like ClashX's port settings override.
+func writeRunningConfig(src, dest string, cfg Config) (string, error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "mixed-port: %d\n", cfg.MixedPort)
+	fmt.Fprintf(&b, "allow-lan: %t\n", cfg.AllowLAN)
+	if cfg.ExternalUI != "" {
+		fmt.Fprintf(&b, "external-ui: %s\n", cfg.ExternalUI)
+	}
+	fmt.Fprintf(&b, "tun:\n  enable: %t\n  stack: system\n"+
+		"  strict-route: false\n  dns-hijack:\n    - any:53\n", cfg.TUN)
+	skipBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		indented := trimmed != "" && (line[0] == ' ' || line[0] == '\t')
+		if skipBlock {
+			if indented {
+				continue
+			}
+			skipBlock = false
+		}
+		if !indented && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if key, _, ok := strings.Cut(trimmed, ":"); ok && slices.Contains(runningOverrideKeys, strings.TrimSpace(key)) {
+				skipBlock = strings.HasSuffix(trimmed, ":") // mapping key whose indented block follows
+				continue
+			}
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(dest, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// fullProfile reports whether path is a complete Clash config (it declares
+// proxy-groups) rather than a provider-style node list. Such subscriptions
+// keep their own groups, rules and DNS instead of the generated fallback.
+func fullProfile(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == line && strings.HasPrefix(trimmed, "proxy-groups:") {
+			return true
+		}
+	}
+	return false
+}
+
+// GroupOrder returns the proxy-groups names in the order the config file
+// declares them, so the UI can list groups like ClashX does instead of the
+// random order of the core's JSON map. Unknown or missing files yield nil.
+func GroupOrder(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	inBlock := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if trimmed == line { // no indent: a new top-level key
+			inBlock = strings.HasPrefix(trimmed, "proxy-groups:")
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		var name string
+		switch rest, ok := strings.CutPrefix(trimmed, "- name:"); {
+		case ok:
+			name = rest
+		default:
+			m := flowNameRE.FindStringSubmatch(trimmed)
+			if m == nil {
+				continue
+			}
+			name = m[1]
+		}
+		// Drop a trailing YAML comment, then surrounding quotes.
+		if i := strings.Index(name, " #"); i >= 0 {
+			name = name[:i]
+		}
+		names = append(names, strings.Trim(strings.TrimSpace(name), `"'`))
+	}
+	return names
+}
+
+// providerBlock renders the proxy-providers block plus the policy groups
+// and rules. When localFile is non-empty the provider is a file provider
+// reading that file (the app-downloaded subscription); otherwise it is an
+// http provider that mihomo fetches itself.
+func providerBlock(localFile, url string) string {
+	var p string
+	if localFile != "" {
+		p = "proxy-providers:\n" +
+			"  provider:\n" +
+			"    type: file\n" +
+			"    path: \"" + localFile + "\"\n" +
+			"    health-check:\n" +
+			"      enable: true\n" +
+			"      url: https://www.gstatic.com/generate_204\n" +
+			"      interval: 300\n"
+	} else {
+		p = "proxy-providers:\n" +
+			"  provider:\n" +
+			"    type: http\n" +
+			"    url: \"" + url + "\"\n" +
+			"    interval: 3600\n" +
+			"    health-check:\n" +
+			"      enable: true\n" +
+			"      url: https://www.gstatic.com/generate_204\n" +
+			"      interval: 300\n"
+	}
+	p += "\nproxy-groups:\n" +
+		"  - name: PROXY\n" +
+		"    type: select\n" +
+		"    use:\n" +
+		"      - provider\n" +
+		"  - name: AUTO\n" +
+		"    type: url-test\n" +
+		"    use:\n" +
+		"      - provider\n" +
+		"    url: https://www.gstatic.com/generate_204\n" +
+		"    interval: 300\n"
+	p += "\nrules:\n" +
+		"  - GEOIP,CN,DIRECT\n" +
+		"  - MATCH,PROXY\n"
+	return p
+}
+
+// WriteYAML writes the runtime config.yaml for mihomo under dir, returning
+// its path.
+//
+//   - When the user supplied a profile (ConfigPath), that file is used as
+//     the config and endpoints are overridden on the CLI by Start.
+//   - When a full subscription config is stored in dir/sub.yaml, that file
+//     becomes the config (overlaid by Start), preserving its groups and
+//     rules.
+//   - When the subscription is only a node list, a file provider loads the
+//     local copy (mihomo needs no network for the nodes).
+//   - Otherwise the subscription URL is used as an http provider, which
+//     mihomo fetches itself.
+//   - With neither, a minimal DIRECT config is generated.
+func (c Config) WriteYAML(dir string) (string, error) {
+	path := filepath.Join(dir, "config.yaml")
+	var b strings.Builder
+	c.writeBase(&b)
+
+	switch {
+	case c.ConfigPath != "":
+		b.WriteString("rules:\n  - MATCH,DIRECT\n")
+	case c.SubscriptionURL != "":
+		file := c.SubscriptionFile
+		if file == "" {
+			file = SubscriptionFile
+		}
+		local := ""
+		if fi, err := os.Stat(filepath.Join(dir, file)); err == nil && fi.Size() > 0 {
+			local = file
+		}
+		b.WriteString(providerBlock(local, c.SubscriptionURL))
+	default:
+		b.WriteString("rules:\n  - MATCH,DIRECT\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// writeBase renders the app-managed header: endpoints, ports, DNS and TUN.
+func (c Config) writeBase(b *strings.Builder) {
+	fmt.Fprintf(b, "mixed-port: %d\n", c.MixedPort)
+	fmt.Fprintf(b, "external-controller: 127.0.0.1:%d\n", c.ControllerPort)
+	if c.Secret != "" {
+		fmt.Fprintf(b, "secret: %s\n", c.Secret)
+	}
+	fmt.Fprintf(b, "allow-lan: %t\n", c.AllowLAN)
+	fmt.Fprintf(b, "mode: %s\n", c.Mode)
+	if c.ExternalUI != "" {
+		fmt.Fprintf(b, "external-ui: %s\n", c.ExternalUI)
+	}
+	b.WriteString("ipv6: " + strconv.FormatBool(c.IPv6) + "\n")
+	b.WriteString("log-level: info\n")
+	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
+		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
+	fmt.Fprintf(b, "tun:\n  enable: %t\n  stack: system\n"+
+		"  strict-route: false\n  dns-hijack:\n    - any:53\n", c.TUN)
+}
+
+// WriteBootstrapYAML writes the minimal config the core boots with: just
+// the endpoints, TUN and a DIRECT catch-all. ClashX Meta starts this way and
+// pushes the real config over the API once the controller answers, so
+// provider and rule loading never delay the core coming up.
+func (c Config) WriteBootstrapYAML(dir string) (string, error) {
+	path := filepath.Join(dir, "config.yaml")
+	var b strings.Builder
+	c.writeBase(&b)
+	b.WriteString("rules:\n  - MATCH,DIRECT\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// runtimeConfigPath picks and materialises the config mihomo loads: the
+// user profile, or a full subscription config overlaid with the
+// app-managed keys so its own groups and rules survive. Provider-style
+// node lists and empty configs fall back to the generated config.
+func runtimeConfigPath(dir string, cfg Config) (string, error) {
+	src := cfg.ConfigPath
+	if src == "" && cfg.SubscriptionURL != "" {
+		if p := filepath.Join(dir, cfg.subFile()); fullProfile(p) {
+			src = p
+		}
+	}
+	if src != "" {
+		if _, err := os.Stat(src); err == nil {
+			return writeRunningConfig(src, filepath.Join(dir, "running.yaml"), cfg)
+		}
+	}
+	return cfg.WriteYAML(dir)
+}
