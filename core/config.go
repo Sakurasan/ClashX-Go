@@ -23,11 +23,11 @@ type Config struct {
 	Mode string `json:"mode"`
 	// ConfigPath is the user's config/profile YAML to load, if any.
 	ConfigPath string `json:"config-path"`
-	// SubscriptionURL, when set, adds a proxy provider for the nodes. The
-	// app downloads the subscription itself first (see
-	// Manager.DownloadSubscription), so the generated config uses a file
-	// provider pointing at the local copy; only when the download failed
-	// or the body is not Clash YAML does it fall back to an http provider.
+	// SubscriptionURL, when set, activates the downloaded subscription. A
+	// full Clash config (one that declares proxy-groups) is used as-is with
+	// the app-managed keys overlaid, so the provider's own groups, rules
+	// and DNS survive; a provider-style node list gets a generated config
+	// with a file provider pointing at the local copy.
 	SubscriptionURL string `json:"subscription-url"`
 	// SubscriptionFile overrides the downloaded-subscription file name
 	// (default SubscriptionFile). Managed profiles each keep their own.
@@ -112,6 +112,23 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// fullProfile reports whether path is a complete Clash config (it declares
+// proxy-groups) rather than a provider-style node list. Such subscriptions
+// keep their own groups, rules and DNS instead of the generated fallback.
+func fullProfile(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == line && strings.HasPrefix(trimmed, "proxy-groups:") {
+			return true
+		}
+	}
+	return false
 }
 
 // GroupOrder returns the proxy-groups names in the order the config file
@@ -204,9 +221,11 @@ func providerBlock(localFile, url string) string {
 //
 //   - When the user supplied a profile (ConfigPath), that file is used as
 //     the config and endpoints are overridden on the CLI by Start.
-//   - When a subscription URL is set and the app has already downloaded it
-//     to dir/sub.yaml, a file provider loads the local copy (mihomo needs
-//     no network for the nodes).
+//   - When a full subscription config is stored in dir/sub.yaml, that file
+//     becomes the config (overlaid by Start), preserving its groups and
+//     rules.
+//   - When the subscription is only a node list, a file provider loads the
+//     local copy (mihomo needs no network for the nodes).
 //   - Otherwise the subscription URL is used as an http provider, which
 //     mihomo fetches itself.
 //   - With neither, a minimal DIRECT config is generated.
@@ -250,4 +269,23 @@ func (c Config) WriteYAML(dir string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// runtimeConfigPath picks and materialises the config mihomo loads: the
+// user profile, or a full subscription config overlaid with the
+// app-managed keys so its own groups and rules survive. Provider-style
+// node lists and empty configs fall back to the generated config.
+func runtimeConfigPath(dir string, cfg Config) (string, error) {
+	src := cfg.ConfigPath
+	if src == "" && cfg.SubscriptionURL != "" {
+		if p := filepath.Join(dir, cfg.subFile()); fullProfile(p) {
+			src = p
+		}
+	}
+	if src != "" {
+		if _, err := os.Stat(src); err == nil {
+			return writeRunningConfig(src, filepath.Join(dir, "running.yaml"), cfg)
+		}
+	}
+	return cfg.WriteYAML(dir)
 }

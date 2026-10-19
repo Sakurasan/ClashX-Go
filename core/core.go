@@ -224,24 +224,10 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	if fi, err := os.Stat(filepath.Join(m.dir, "dashboard", "index.html")); err == nil && !fi.IsDir() {
 		cfg.ExternalUI = "dashboard"
 	}
-	configPath := cfg.ConfigPath
-	if configPath != "" {
-		if _, err := os.Stat(configPath); err != nil {
-			configPath = ""
-		} else if overlay, err := writeRunningConfig(configPath, filepath.Join(m.dir, "running.yaml"), cfg); err == nil {
-			configPath = overlay
-		} else {
-			m.mu.Unlock()
-			return "", err
-		}
-	}
-	if configPath == "" {
-		var err error
-		configPath, err = cfg.WriteYAML(m.dir)
-		if err != nil {
-			m.mu.Unlock()
-			return "", err
-		}
+	configPath, err := runtimeConfigPath(m.dir, cfg)
+	if err != nil {
+		m.mu.Unlock()
+		return "", err
 	}
 	args := []string{"-d", m.dir, "-f", configPath}
 	if cfg.ControllerPort > 0 {
@@ -652,12 +638,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, cfg Config) (int, str
 // ReloadConfig writes cfg to disk (overlay or generated) and returns the
 // file the running core should pick up via Client.Reload.
 func (m *Manager) ReloadConfig(cfg Config) (string, error) {
-	if cfg.ConfigPath != "" {
-		if _, err := os.Stat(cfg.ConfigPath); err == nil {
-			return writeRunningConfig(cfg.ConfigPath, filepath.Join(m.dir, "running.yaml"), cfg)
-		}
-	}
-	return cfg.WriteYAML(m.dir)
+	return runtimeConfigPath(m.dir, cfg)
 }
 
 // LogPath returns where the core writes its stdout/stderr.
