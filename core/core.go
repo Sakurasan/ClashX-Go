@@ -221,8 +221,11 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 		m.mu.Unlock()
 		return "", fmt.Errorf("core binary missing: %w", err)
 	}
-	if fi, err := os.Stat(filepath.Join(m.dir, "dashboard", "index.html")); err == nil && !fi.IsDir() {
-		cfg.ExternalUI = "dashboard"
+	for _, ui := range []string{"dashboard", "ui"} {
+		if fi, err := os.Stat(filepath.Join(m.dir, ui, "index.html")); err == nil && !fi.IsDir() {
+			cfg.ExternalUI = ui
+			break
+		}
 	}
 	configPath, err := runtimeConfigPath(m.dir, cfg)
 	if err != nil {

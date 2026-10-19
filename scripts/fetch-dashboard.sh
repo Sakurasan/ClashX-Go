@@ -11,7 +11,7 @@ if [ ! -f "$SRC/index.html" ]; then
 fi
 rm -rf resources/dashboard
 cp -R "$SRC" resources/dashboard
-DEST="$HOME/Library/Application Support/clashx-go/dashboard"
+DEST="$HOME/.config/clashx-go/dashboard"
 rm -rf "$DEST"
 mkdir -p "$DEST"
 cp -R "$SRC"/. "$DEST"

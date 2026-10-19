@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -367,11 +368,57 @@ func (a *app) updateTrayIcon(running bool) {
 	}
 }
 
-// coreDir returns the per-user directory for the core binary and config.
+// coreDir is our own config folder, a sibling of ClashX Meta's
+// ~/.config/clash.meta. Keeping it separate means no shared cache.db,
+// configs or remembered node selections.
 func coreDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		dir := filepath.Join(home, ".config", "clashx-go")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			migrateLegacyCoreDir(dir)
+			return dir
+		}
+	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		base = os.TempDir()
 	}
 	return filepath.Join(base, "clashx-go")
+}
+
+// migrateLegacyCoreDir copies settings, downloaded subscriptions and the
+// dashboard from the pre-~/.config location on first launch there. The old
+// directory is left in place.
+func migrateLegacyCoreDir(dest string) {
+	if _, err := os.Stat(filepath.Join(dest, "app.json")); err == nil {
+		return
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return
+	}
+	old := filepath.Join(base, "clashx-go")
+	data, err := os.ReadFile(filepath.Join(old, "app.json"))
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dest, "app.json"), data, 0o644)
+	entries, _ := os.ReadDir(old)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, "sub") || !strings.HasSuffix(name, ".yaml") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dest, name)); err == nil {
+			continue
+		}
+		if data, err := os.ReadFile(filepath.Join(old, name)); err == nil {
+			_ = os.WriteFile(filepath.Join(dest, name), data, 0o644)
+		}
+	}
+	if st, err := os.Stat(filepath.Join(old, "dashboard")); err == nil && st.IsDir() {
+		if _, err := os.Stat(filepath.Join(dest, "dashboard")); os.IsNotExist(err) {
+			_ = os.CopyFS(filepath.Join(dest, "dashboard"), os.DirFS(filepath.Join(old, "dashboard")))
+		}
+	}
 }

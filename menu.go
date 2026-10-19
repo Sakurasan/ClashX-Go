@@ -663,9 +663,16 @@ func (a *app) reopenMenu() {
 
 // openConsole shows the core's built-in dashboard (zashboard served at
 // /ui by external-ui), falling back to the panel overview when the
-// dashboard assets are not installed.
+// dashboard assets are not installed. ClashX Meta's own ui/ bundle counts.
 func (a *app) openConsole() {
-	if _, err := os.Stat(filepath.Join(coreDir(), "dashboard", "index.html")); err != nil {
+	installed := false
+	for _, ui := range []string{"dashboard", "ui"} {
+		if _, err := os.Stat(filepath.Join(coreDir(), ui, "index.html")); err == nil {
+			installed = true
+			break
+		}
+	}
+	if !installed {
 		a.showPanel(tabOverview)
 		return
 	}
