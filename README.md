@@ -1,149 +1,171 @@
 # ClashX Go
 
-A macOS menu bar Clash (mihomo) client built with
-[MyGo](https://mygo.egoist.dev) and the
-[uix](https://github.com/smallnest/uix) shadcn-style component library.
+**English** | [简体中文](README.zh-CN.md)
 
-The mihomo core **ships inside the app**: it is downloaded once at build
-time, bundled into the `.app`, and copied out to the user's data directory
-on first launch — no runtime download. Click Start in the menu bar panel to
-boot it, Stop to shut it down. The panel shows live traffic, policy groups
-and a small settings form, all without opening a full window — it floats
-next to the tray icon.
+A macOS menu bar proxy client modeled closely on [ClashX](https://github.com/yichengchen/clashX)
+and [ClashX Meta](https://github.com/MetaCubeX/ClashX.Meta), built in Go with
+[MyGo](https://mygo.egoist.dev) and powered by [mihomo](https://github.com/MetaCubeX/mihomo).
+
+ClashX Go aims to feel like the original: a native menu bar menu with policy
+groups, node latency badges and live speeds, plus a ClashX-style preferences
+window — but with a single self-contained `.app` that bundles the core and
+needs no runtime download.
+
+![ClashX Go icon](assets/icon.png)
 
 ## Features
 
-- Menu bar app (accessory app, no Dock icon) with a frameless always-on-top
-  panel window
-- Self-contained core: one universal `.app` (arm64 + x86_64) with the mihomo
-  core bundled in; no download, no network needed at first run
-- Live traffic data (up/down bytes via the `/traffic` stream)
-- Overview tab: running state, version, mode, download/upload totals
-- Proxies tab: policy groups (Selector/URLTest/Fallback/LoadBalance),
-  choose a node, run a group latency test
-- Settings tab: mixed port, external-controller port, API secret,
-  **subscription URL** (auto-pulls nodes + updates), optional config
-  profile, Save & Restart Core
-- Persisted settings in `~/Library/Application Support/clashx-go/app.json`
-- Core logs written to `core.log` next to the binary
+**Menu bar, ClashX style**
 
-## Getting it to proxy for real
+- Native tray menu: outbound mode, policy groups with per-node latency
+  badges (`✅ / ⚠️ / ❌`), node switching, latency tests, config management
+- Two-line live speed in the menu bar (`↑ / ↓`), fixed width so it never
+  jitters; the whole item dims while neither system proxy nor TUN is active
+- ClashX Meta's cat icon (menu bar), interchangeable with a custom
+  `menuImage.png` in the config folder
 
-The mihomo core runs out of the box, but with **no real nodes** it only
-routes `MATCH,DIRECT` — every connection goes straight out locally, so
-there is no proxy effect. To get proxying you must give the app real
-nodes. Two ways, both in the **Settings** tab:
+**Proxy control**
 
-1. **Subscription URL** (recommended): paste your Clash subscription link.
-   The generated config adds a `proxy-providers` block — mihomo pulls the
-   nodes itself and refreshes them hourly. This is the only network the
-   app needs at runtime (for the subscription and geo data).
-2. **Config profile**: select a local `config.yaml` (e.g. from an existing
-   ClashX/Clash client). It wins over the subscription when both are set.
+- System proxy without a privileged helper, with the user's previous proxy
+  configuration snapshotted and restored on disable/quit
+- TUN mode: a one-time administrator authorization installs a setuid copy of
+  the core, after which toggling TUN is a passwordless hot API call
+- Automatic pause on selected Wi-Fi SSIDs, auto-restart of a stopped core,
+  and automatic controller-port shifting when the configured port is busy
 
-> The app bundles a **GeoIP database** (`geoip.metadb`) so the `GEOIP,CN`
-> rules work offline on first launch — no slow geo download on startup.
+**Config management**
 
-### A note on free test nodes
+- Managed subscriptions (add / update / delete, rename by provider title,
+  quota and expiry shown in the menu) and local config files
+- Subscriptions that are full Clash configs keep their **own policy groups,
+  rules and DNS**; provider-style node lists get a generated config
+- Restart-free live reload; edits to the active config file are picked up
+  automatically; remembered node selections are replayed after each reload
 
-The core, subscription fetching, policy groups and the `GEOIP,CN,DIRECT`
-split all work (verified end to end). But free/aggregated public
-subscriptions contain mostly dead or heavily throttled nodes — Google via
-a dead JP node times out or fails TLS while baidu still goes DIRECT. Use a
-**paid, working subscription** for reliable proxying; the app just needs
-the URL.
+**Preferences (ClashX semantics)**
+
+- Four tabs: 通用 / 全局快捷键 / 调试 / Meta
+- General: launch at login, notifications, IPv6, ports, API secret,
+  allow-LAN, latency-test URL, Wi-Fi suspend list, proxy bypass list
+- Global hotkeys for proxy/TUN, mode switching, copy command, open menu/log/
+  dashboard (accelerated via MyGo's global shortcut module)
+- Built-in dashboard: mihomo's `external-ui` serves zashboard at `/ui`
 
 ## Requirements
 
-- macOS 11+ (the shipped app is universal: arm64 and x86_64)
-- Go 1.27+ to build; the MyGo CLI comes from `go tool mygo`
-- `curl` and `gunzip` for the one-time core pre-download
+- macOS 11 or later (Apple Silicon or Intel; build with
+  `-platform darwin/universal` for one app that runs natively on both)
+- Go 1.27+ to build; the MyGo CLI is declared as a Go tool (`go tool mygo`)
+- `curl` and `gunzip` to fetch the bundled cores at build time
 
-## Build
+## Install
 
-The core binaries must be fetched **before** building, for both
-architectures, so the bundled app is universal and self-contained:
+Download the `.dmg` from the Releases page, open it and drag
+`clashx-go.app` into `Applications`.
 
-```sh
-scripts/fetch-cores.sh                  # downloads mihomo v1.19.32 for arm64 + amd64
-go tool mygo build -platform darwin/universal
-```
+The app is ad-hoc signed (no Developer ID), so the first launch may be
+blocked by Gatekeeper: right-click the app → **Open**, or allow it in
+**System Settings → Privacy & Security**.
 
-`fetch-cores.sh` writes `resources/darwin-arm64/mihomo` and
-`resources/darwin-amd64/mihomo`. MyGo's platform resource directories ship
-only with the matching platform's build, and for `darwin/universal` it
-**combines the two per-arch cores into a single universal `mihomo`** inside
-`Contents/Resources` — so one app runs natively on both Apple Silicon and
-Intel, with the right core architecture chosen at runtime.
+## Build from source
 
-Output:
-
-```
-build/darwin-universal/
-  clashx-go.app          ~135 MB (universal, core included)
-  clashx-go 0.1.0.dmg    ~39 MB
-```
-
-A single-architecture build works too (its core is flattened into
-`Contents/Resources/mihomo`):
+Fetch the mihomo core for both architectures first, then build the app:
 
 ```sh
-go tool mygo build -platform darwin/arm64
+scripts/fetch-cores.sh                  # mihomo v1.19.32 for arm64 + amd64
+go tool mygo build                      # -> build/darwin-<arch>/clashx-go.app + .dmg
+go tool mygo build -platform darwin/universal   # universal app + universal core
 ```
 
-## Run in development
+Optional: install zashboard for the built-in 控制台 (`/ui`):
 
 ```sh
-go build . && ./clashx-go            # needs resources/darwin-<arch>/mihomo
-go tool mygo dev                     # live reload via the MyGo CLI
+scripts/fetch-dashboard.sh
 ```
 
-## Tests
+For day-to-day development:
 
 ```sh
-go test ./...
-go vet ./...
+go tool mygo dev        # live-reload development build
+go build . && ./clashx-go   # plain binary; needs resources/darwin-<arch>/mihomo
+go test ./... && go vet ./...
 ```
 
-- `main_test.go` renders the panel headlessly with MyGo's `ui.NewTester`
-  (no window, no core).
-- `core/smoke_test.go` boots the **real** bundled core end to end: copies
-  it from the resources, generates a config, waits for the external
-  controller, checks the secret is enforced, and stops it. It skips when
-  the bundled core is absent.
+> Note: macOS login items (开机启动) require a real `.app` bundle, so that
+> switch only works in a MyGo build, not in a plain development binary.
 
-## How the core is managed
+## Usage
 
-- `scripts/fetch-cores.sh` downloads `mihomo-darwin-{arm64,amd64}.gz` into
-  `resources/darwin-<arch>/mihomo` before the build.
-- On first launch `Manager.EnsureBinary` copies the bundled core (the
-  universal `Resources/mihomo`, or the per-arch file) to
-  `~/Library/Application Support/clashx-go/mihomo`, `chmod +x`. Nothing is
-  fetched from the network at runtime.
-- `config.yaml` is generated next to it with the mixed port, external
-  controller `127.0.0.1:<port>`, optional secret and a minimal DNS block, so
-  the core runs cleanly out of the box.
-- When a config profile is set in Settings, that file is used instead
-  (`-f <profile>`), and the controller endpoint and secret are overridden on
-  the CLI with `-ext-ctl` and `-secret` (verified against the mihomo source:
-  there is no `-mixed-port` flag — the mixed port always comes from the
-  config file).
-- The app polls `/configs` and `/proxies` every 2 s and streams `/traffic`
-  continuously; state is coalesced and handed to the UI on the main thread.
+1. Launch the app — the cat appears in the menu bar and the core starts
+   automatically.
+2. Open the menu → **配置** → **托管配置 → 管理…** to add a subscription, or
+   pick a local YAML config from the list.
+3. Turn on **系统代理** or **Tun 模式** from the menu; the menu bar icon
+   becomes solid while a proxy path is active.
+4. **更多设置 → 偏好设置…** opens the settings window (`⌘,`).
 
-## Layout
+### Files
+
+Everything lives in `~/.config/clashx-go/`, kept separate from ClashX
+Meta's `~/.config/clash.meta/`:
+
+| File | Purpose |
+| --- | --- |
+| `app.json` | app settings, profiles and remembered node selections |
+| `sub-*.yaml` | downloaded subscriptions |
+| `running.yaml` | config actually pushed to the core (ports/TUN overlaid) |
+| `config.yaml` | generated config for provider-style subscriptions |
+| `core.log` | mihomo stdout/stderr |
+| `dashboard/` or `ui/` | optional web dashboard served at `/ui` |
+
+## How it works
+
+- The core binary ships inside the app bundle. On first launch it is copied
+  to the config folder; nothing is downloaded at runtime.
+- The core boots with a minimal **bootstrap config** (endpoints, TUN, a
+  DIRECT catch-all) and the full config is pushed over `PUT /configs` right
+  after the controller answers — startup is ~200 ms and live reloads happen
+  in the background while old routing keeps serving.
+- Runtime state (`/configs`, `/proxies`, `/traffic`) is polled/streamed and
+  coalesced into one state snapshot consumed by the tray menu and settings
+  window.
+- TUN uses a one-time `osascript`-authorized setuid copy of the core
+  (`/Library/Application Support/clashx-go/mihomo`); no helper daemon and no
+  password on later toggles.
+
+## Project layout
 
 ```
-main.go              app lifecycle, tray, panel window, core start/stop
-panel.go             uix panel view (Overview / Proxies / Settings)
-settings.go          editable settings, persistence (app.json)
-scripts/fetch-cores.sh  pre-download the cores for both archs
+main.go              app lifecycle, tray, settings window, core orchestration
+menu.go              ClashX-style tray menu (groups, proxies, configs, help)
+panel.go             settings window shell, tabs and panes
+settings.go          settings model, persistence, 通用 pane
+shortcuts.go         global hotkey registry
+about.go             About window
+profiles.go          managed subscriptions
+manage.go, subdlg.go subscription manager / add dialog
+systemproxy_*.go     system proxy snapshot, apply and restore (macOS/other)
+tray_speed.go        menu bar bitmap: icon + two-line speed
 core/
-  core.go            Manager: copy the bundled core, spawn/stop mihomo
-  config.go          runtime config.yaml generation
-  client.go          REST client for the external controller
-  controller.go      state machine, polling + traffic loops
-resources/
-  darwin-arm64/mihomo   downloaded by fetch-cores.sh (arm64)
-  darwin-amd64/mihomo   downloaded by fetch-cores.sh (x86_64)
+  core.go            process manager: bundled core, bootstrap config, TUN
+  config.go          config generation/overlay
+  client.go          mihomo REST client
+  controller.go      state polling and traffic streaming
+scripts/             core and dashboard fetchers
+assets/              app icon and menu bar cat (embedded)
 ```
+
+## Credits
+
+- [ClashX](https://github.com/yichengchen/clashX) and
+  [ClashX Meta](https://github.com/MetaCubeX/ClashX.Meta) by west2online and
+  contributors — UI, behavior and icon assets this project is modeled on
+- [mihomo](https://github.com/MetaCubeX/mihomo) — the proxy core
+- [MyGo](https://mygo.egoist.dev) by egoist — native macOS UI framework
+- [uix](https://github.com/smallnest/uix) — component library
+- [zashboard](https://github.com/Zephyruso/zashboard) — web dashboard
+
+## License
+
+[AGPL-3.0](LICENSE), following ClashX Meta, whose icons and design this
+project reuses.
