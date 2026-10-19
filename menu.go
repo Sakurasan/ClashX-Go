@@ -261,14 +261,30 @@ func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 		return
 	}
 	go func() {
-		if err := setSystemProxy(on, a.mixedPort()); err != nil {
-			a.settings.systemProxy = !on
+		if on {
+			if a.settings.proxyBackup == nil {
+				if b, err := snapshotProxy(); err == nil {
+					a.settings.proxyBackup = b
+				}
+			}
+			if err := pointProxyAt(a.mixedPort()); err != nil {
+				a.settings.systemProxy = false
+				saveSettings(coreDir(), a.settings)
+				a.menu.sysProxy.SetChecked(false)
+				a.reportError("系统代理", err.Error())
+				return
+			}
+			a.settings.systemProxy = true
 			saveSettings(coreDir(), a.settings)
-			a.menu.sysProxy.SetChecked(!on)
-			a.reportError("系统代理", err.Error())
 			return
 		}
-		a.settings.systemProxy = on
+		// Off: put the user's own proxy config back (ClashX restoreProxy).
+		err := restoreProxy(a.settings.proxyBackup)
+		if err != nil {
+			a.reportError("系统代理", "恢复原代理设置失败："+err.Error())
+		}
+		a.settings.systemProxy = false
+		a.settings.proxyBackup = nil
 		saveSettings(coreDir(), a.settings)
 	}()
 }
@@ -288,8 +304,8 @@ func (a *app) setLANToggle(it *mygo.MenuItem) {
 	a.settings.allowLAN = it.IsChecked()
 	saveSettings(coreDir(), a.settings)
 	go func() {
-		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.reportError("局域网", "重启核心失败："+err.Error())
+		if err := a.applyConfig(a.settingsConfig()); err != nil {
+			log.Printf("局域网重启待重试: %v", err)
 		}
 	}()
 }
@@ -317,28 +333,21 @@ func (a *app) setTUNToggle(it *mygo.MenuItem) {
 				if err == nil {
 					return
 				}
-				// Hot switch failed: fall back to a full restart.
-				if rerr := a.restartCore(a.settingsConfig()); rerr == nil {
+				// Hot switch failed: fall back to a full restart; its
+				// retry loop reports if the core still cannot come up.
+				err = a.applyConfig(a.settingsConfig())
+				if err == nil {
 					return
 				}
-				a.settings.tun = !on
-				saveSettings(coreDir(), a.settings)
-				a.menu.tunItem.SetChecked(!on)
-				a.reportError("Tun 模式", err.Error())
+				log.Printf("TUN 重启待重试: %v", err)
 			}()
 			return
 		}
 	}
 	go func() {
-		err := a.restartCore(a.settingsConfig())
-		if err == nil {
-			return
+		if err := a.applyConfig(a.settingsConfig()); err != nil {
+			log.Printf("TUN 重启待重试: %v", err)
 		}
-		a.settings.tun = !on
-		saveSettings(coreDir(), a.settings)
-		a.menu.tunItem.SetChecked(!on)
-		// A failed elevation must be seen: the panel toast window is hidden.
-		a.reportError("Tun 模式", err.Error())
 	}()
 }
 
@@ -401,10 +410,12 @@ func (a *app) chooseLocalConfig() {
 	a.selectLocalConfig(files[0])
 }
 
+// reloadCore restarts the core; a transient port conflict self-heals via
+// restartCore's silent retry, so only log here.
 func (a *app) reloadCore() {
 	go func() {
-		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.reportError("重载失败", err.Error())
+		if err := a.applyConfig(a.settingsConfig()); err != nil {
+			log.Printf("重载待重试: %v", err)
 		}
 	}()
 }

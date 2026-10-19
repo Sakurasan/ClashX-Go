@@ -48,6 +48,9 @@ type settings struct {
 	allowLAN       bool
 	showTraffic    bool
 	tun            bool
+	// proxyBackup is the user's own system-proxy config captured before we
+	// overwrote it; restoring it beats switching ours off.
+	proxyBackup *systemProxyBackup
 }
 
 // settingsJSON is the wire form of settings. It exists because the in-memory
@@ -67,6 +70,7 @@ type settingsJSON struct {
 	AllowLAN       bool                  `json:"allowLAN"`
 	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
 	TUN            bool                  `json:"tun"`
+	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
 	// Legacy single-subscription field, migrated into Profiles on load.
 	SubscriptionURL string `json:"subscriptionURL,omitempty"`
 }
@@ -102,6 +106,7 @@ func loadSettings(dir string) *settings {
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
 	s.tun = w.TUN
+	s.proxyBackup = w.ProxyBackup
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
 	}
@@ -143,6 +148,7 @@ func saveSettings(dir string, s *settings) {
 		SystemProxy:    s.systemProxy,
 		AllowLAN:       s.allowLAN,
 		TUN:            s.tun,
+		ProxyBackup:    s.proxyBackup,
 		ShowTraffic:    &s.showTraffic,
 	}
 	data, err := json.MarshalIndent(w, "", "  ")
@@ -230,7 +236,7 @@ func (p *panelApp) saveAndRestart() {
 				log.Println("subscription refresh: ", err)
 			}
 		}
-		if err := p.app.restartCore(cfg); err != nil {
+		if err := p.app.applyConfig(cfg); err != nil {
 			p.app.showToast("重启失败", err.Error())
 		} else {
 			p.app.showToast("核心已重启", "正在使用新的设置运行。")

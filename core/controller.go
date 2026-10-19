@@ -274,6 +274,31 @@ func (c *Controller) SelectProxy(ctx context.Context, group, member string) erro
 	return nil
 }
 
+// ReloadConfig applies a new config to the running core without a restart,
+// swapping the controller's own view of it (order, subscription file).
+func (c *Controller) ReloadConfig(ctx context.Context, cfg Config) error {
+	path, err := c.mgr.ReloadConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if err := c.client.Reload(ctx, path); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.cfg = cfg
+	c.groupOrder = GroupOrder(path)
+	c.mu.Unlock()
+	c.setState(func(s *State) { s.Mode = cfg.Mode })
+	return nil
+}
+
+// Config returns the configuration the controller is built with.
+func (c *Controller) CurrentConfig() Config {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cfg
+}
+
 // SetTUN hot-toggles the core's TUN interface without a restart.
 func (c *Controller) SetTUN(ctx context.Context, enable bool) error {
 	return c.client.SetTUN(ctx, enable)

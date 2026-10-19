@@ -123,8 +123,8 @@ func (a *app) addProfile(rawURL string) error {
 	saveSettings(coreDir(), a.settings)
 	a.menu.rebuild()
 	go func() {
-		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.reportError("添加订阅", err.Error())
+		if err := a.applyConfig(a.settingsConfig()); err != nil {
+			log.Printf("添加订阅待重试: %v", err)
 		}
 	}()
 	return nil
@@ -153,8 +153,8 @@ func (a *app) selectProfile(name string) {
 				saveSettings(coreDir(), st)
 			}
 		}
-		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.reportError("切换配置", err.Error())
+		if err := a.applyConfig(a.settingsConfig()); err != nil {
+			log.Printf("切换配置待重试: %v", err)
 		}
 	}()
 }
@@ -170,8 +170,8 @@ func (a *app) selectLocalConfig(path string) {
 	saveSettings(coreDir(), a.settings)
 	a.menu.rebuild()
 	go func() {
-		if err := a.restartCore(a.settingsConfig()); err != nil {
-			a.reportError("本地配置", err.Error())
+		if err := a.applyConfig(a.settingsConfig()); err != nil {
+			log.Printf("本地配置待重试: %v", err)
 		}
 	}()
 }
@@ -204,7 +204,7 @@ func (a *app) removeProfile(name string) {
 	a.menu.rebuild()
 	if wasActive {
 		go func() {
-			if err := a.restartCore(a.settingsConfig()); err != nil {
+			if err := a.applyConfig(a.settingsConfig()); err != nil {
 				a.reportError("删除订阅", err.Error())
 			}
 		}()

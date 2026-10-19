@@ -209,7 +209,7 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 	// generous window for the port to come free.
 	if cfg.ControllerPort > 0 && !waitPortFree(cfg.ControllerPort, 20*time.Second) {
 		m.mu.Unlock()
-		return "", fmt.Errorf("端口 %d 已被占用（可能另有 Clash 核心在运行），请在偏好设置里换一个控制器端口", cfg.ControllerPort)
+		return "", fmt.Errorf("端口 %d 已被 %s 占用，请在偏好设置里换一个控制器端口", cfg.ControllerPort, portHolder(cfg.ControllerPort))
 	}
 	bin := m.Binary()
 	if _, err := os.Stat(bin); err != nil {
@@ -475,6 +475,26 @@ func portAvailable(port int) bool {
 	return true
 }
 
+// portHolder names the process listening on a TCP port, for error text.
+func portHolder(port int) string {
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+fmt.Sprint(port), "-sTCP:LISTEN", "-Fpcn").Output()
+	if err != nil || len(out) == 0 {
+		return "其他进程"
+	}
+	var name, pid string
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(line, "p"); ok && pid == "" {
+			pid = v
+		} else if v, ok := strings.CutPrefix(line, "c"); ok && name == "" {
+			name = v
+		}
+	}
+	if name == "" {
+		return "其他进程"
+	}
+	return name + " (pid " + pid + ")"
+}
+
 // waitPortFree polls portAvailable until it succeeds or timeout passes.
 func waitPortFree(port int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
@@ -608,6 +628,17 @@ func (m *Manager) RefreshSubscription(ctx context.Context, cfg Config) (int, str
 		proxy = fmt.Sprintf("127.0.0.1:%d", cfg.MixedPort)
 	}
 	return m.DownloadSubscription(ctx, cfg.subFile(), cfg.SubscriptionURL, proxy)
+}
+
+// ReloadConfig writes cfg to disk (overlay or generated) and returns the
+// file the running core should pick up via Client.Reload.
+func (m *Manager) ReloadConfig(cfg Config) (string, error) {
+	if cfg.ConfigPath != "" {
+		if _, err := os.Stat(cfg.ConfigPath); err == nil {
+			return writeRunningConfig(cfg.ConfigPath, filepath.Join(m.dir, "running.yaml"), cfg)
+		}
+	}
+	return cfg.WriteYAML(m.dir)
 }
 
 // LogPath returns where the core writes its stdout/stderr.

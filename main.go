@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -82,7 +83,17 @@ func (a *app) ready() {
 	}
 	a.menu = &trayMenu{app: a}
 	a.menu.build(a.ctrl.State())
-	a.tray.SetMenu(a.menu.menu)
+	if runtime.GOOS == "linux" {
+		a.tray.SetMenu(a.menu.menu)
+	} else {
+		// ClashX refreshes on open (NSMenuDelegate menuNeedsUpdate), which
+		// MyGo does not expose. Leave the item menu unset so clicks reach
+		// OnClick: rebuild from the freshest state, then pop it up.
+		a.tray.OnClick(func() {
+			a.menu.rebuild()
+			a.tray.PopUpMenu()
+		})
+	}
 	a.panel = &panelApp{app: a}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:             "ClashX Go",
@@ -106,9 +117,13 @@ func (a *app) ready() {
 		}
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
-		// Never leave the system pointing at a port that is about to close.
+		// Never leave the system pointing at a port that is about to close;
+		// restore the user's own proxy config, not just "off".
 		if a.settings != nil && a.settings.systemProxy {
-			_ = setSystemProxy(false, a.mixedPort())
+			_ = restoreProxy(a.settings.proxyBackup)
+			a.settings.systemProxy = false
+			a.settings.proxyBackup = nil
+			saveSettings(dir, a.settings)
 		}
 		a.ctrl.Stop()
 		a.tray.Destroy()
@@ -119,38 +134,56 @@ func (a *app) ready() {
 	go a.autoUpdateLoop(context.Background())
 }
 
+// onState marshals onto the main thread with an async post (never a
+// synchronous onMain): a modal dialog open on the main thread must not
+// stall the controller goroutines that emit state.
 func (a *app) onState(s core.State) {
-	if a.tray != nil {
-		status := "核心已停止"
-		if s.Running {
-			status = "核心运行中 · 模式 " + s.Mode
+	if a.win == nil {
+		return
+	}
+	a.win.Update(func() {
+		if a.tray != nil {
+			status := "核心已停止"
+			if s.Running {
+				status = "核心运行中 · 模式 " + s.Mode
+			}
+			a.tray.SetToolTip("ClashX Go — " + status)
 		}
-		a.tray.SetToolTip("ClashX Go — " + status)
-	}
-	if a.win != nil {
-		// Marshal onto the main thread: the menu's items and structure are
-		// only ever mutated there, together with the click handlers.
-		a.win.Update(func() { a.menu.refresh(s) })
-	} else {
-		log.Printf("onState: no window, running=%v groups=%d", s.Running, len(s.Groups))
-	}
+		a.menu.refresh(s)
+	})
 }
 
 func (a *app) startCore() { a.startCoreReport(true) }
 
 // startCoreReport brings the core up. A failed start schedules a silent
 // retry (ClashX has no manual start switch: transient conflicts must
-// self-heal); report only governs the first, user-visible error.
+// self-heal). The error dialog runs on its own goroutine: it is modal and
+// must never hold coreOp, or an undismissed dialog freezes the retry chain.
 func (a *app) startCoreReport(report bool) {
+	err := a.startCoreLocked()
+	if err == nil {
+		return
+	}
+	time.AfterFunc(30*time.Second, func() {
+		if a.quitting || a.userStopped || a.ctrl.State().Running {
+			return
+		}
+		a.startCoreReport(false)
+	})
+	if report {
+		go a.reportError("核心启动失败", err.Error())
+	}
+}
+
+func (a *app) startCoreLocked() error {
 	a.coreOp.Lock()
 	defer a.coreOp.Unlock()
 	a.userStopped = false
 	if a.ctrl.Manager().Running() {
 		// A quick 停止→启动 or double click: the previous op already won
 		// the race, and Manager.Start would only error "already running".
-		return
+		return nil
 	}
-	ctx := context.Background()
 	// Re-read settings so a fresh Start (e.g. from the panel footer)
 	// uses the current endpoints.
 	a.ctrl = core.NewController(a.ctrl.Manager(), a.settingsConfig())
@@ -160,20 +193,9 @@ func (a *app) startCoreReport(report bool) {
 	if a.settingsConfig().SubscriptionURL != "" {
 		a.ctrl.SetSubDownloading(true)
 	}
-	if err := a.ctrl.Start(ctx); err != nil {
-		if report {
-			a.reportError("核心启动失败", err.Error())
-		}
-		a.ctrl.SetSubDownloading(false)
-		time.AfterFunc(30*time.Second, func() {
-			if a.quitting || a.userStopped || a.ctrl.State().Running {
-				return
-			}
-			a.startCoreReport(false)
-		})
-		return
-	}
+	err := a.ctrl.Start(context.Background())
 	a.ctrl.SetSubDownloading(false)
+	return err
 }
 
 // stopCore is the user's explicit stop (panel footer); it cancels the
@@ -185,6 +207,25 @@ func (a *app) stopCore() {
 	a.ctrl.Stop()
 }
 
+// applyConfig switches configuration live: mihomo re-reads the config file
+// in place (the ClashX-instant path, the port never opens). Only changes a
+// running core cannot absorb (API port/secret) or a failed reload fall
+// back to a full process restart.
+func (a *app) applyConfig(cfg core.Config) error {
+	old := a.ctrl.CurrentConfig()
+	if a.ctrl.State().Running && cfg.ControllerPort == old.ControllerPort && cfg.Secret == old.Secret {
+		cfg.Mode = a.ctrl.State().Mode // keep the live mode across the reload
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := a.ctrl.ReloadConfig(ctx, cfg)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		log.Printf("live reload failed, restarting core: %v", err)
+	}
+	return a.restartCore(cfg)
+}
+
 // restartCore stops the old controller config and starts a new one.
 func (a *app) restartCore(cfg core.Config) error {
 	a.coreOp.Lock()
@@ -192,7 +233,20 @@ func (a *app) restartCore(cfg core.Config) error {
 	a.ctrl.Stop()
 	a.ctrl = core.NewController(a.ctrl.Manager(), cfg)
 	a.ctrl.OnChange(a.onState)
-	return a.ctrl.Start(context.Background())
+	if err := a.ctrl.Start(context.Background()); err != nil {
+		// A killed TUN core can take tens of seconds to release its port
+		// while the kernel tears the interface down. Retry quietly after a
+		// grace period; only a retry that also fails bothers the user.
+		go func() {
+			time.Sleep(6 * time.Second)
+			if a.quitting || a.userStopped || a.ctrl.Manager().Running() {
+				return
+			}
+			a.startCoreReport(true)
+		}()
+		return err
+	}
+	return nil
 }
 
 // settingsConfig builds the controller config from the app settings.

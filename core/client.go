@@ -222,6 +222,21 @@ func (c *Client) SelectProxy(ctx context.Context, group, member string) error {
 	return nil
 }
 
+// Reload asks the running core to re-read a config file in place
+// (PUT /configs {"path"}), the zero-downtime reload path.
+func (c *Client) Reload(ctx context.Context, path string) error {
+	body := strings.NewReader(fmt.Sprintf(`{"path":%q}`, path))
+	resp, err := c.do(ctx, http.MethodPut, "/configs", body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("PUT /configs path: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // TestProxyDelay measures one proxy's latency in ms. mihomo answers 503
 // with {"message":"timeout"} for unreachable nodes, reported as -1.
 func (c *Client) TestProxyDelay(ctx context.Context, name string) (int, error) {
