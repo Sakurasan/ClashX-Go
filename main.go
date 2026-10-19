@@ -85,6 +85,7 @@ func (a *app) ready() {
 	}
 	a.menu = &trayMenu{app: a}
 	a.menu.build(a.ctrl.State())
+	a.applyShortcuts()
 	if runtime.GOOS == "linux" {
 		a.tray.SetMenu(a.menu.menu)
 	} else {
@@ -98,20 +99,12 @@ func (a *app) ready() {
 	}
 	a.panel = &panelApp{app: a}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title:             "ClashX 设置",
-		Width:             420,
-		Height:            700,
-		Hidden:            true,
-		Frameless:         true,
-		DisableResize:     true,
-		DisableMinimize:   true,
-		DisableMaximize:   true,
-		DisableFullScreen: true,
-		AlwaysOnTop:       true,
-		SkipTaskbar:       true,
-		Content:           ui.View(a.panel.view),
+		Title:   "ClashX 设置",
+		Width:   520,
+		Height:  720,
+		Hidden:  true,
+		Content: ui.View(a.panel.view),
 	})
-	a.win.OnBlur(a.win.Hide)
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()

@@ -14,9 +14,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/smallnest/uix/components/button"
-	"github.com/smallnest/uix/components/field"
-	"github.com/smallnest/uix/components/input"
-	switcher "github.com/smallnest/uix/components/switch"
 )
 
 // toastMsg is a pending toast to show on the next frame.
@@ -70,6 +67,8 @@ type settings struct {
 	suspendSSIDs   string
 	noNotify       bool
 	selections     []savedSelection
+	// shortcuts maps action id -> accelerator (e.g. "CmdOrCtrl+Shift+P").
+	shortcuts map[string]string
 	// proxyBackup is the user's own system-proxy config captured before we
 	// overwrote it; restoring it beats switching ours off.
 	proxyBackup *systemProxyBackup
@@ -98,6 +97,7 @@ type settingsJSON struct {
 	SuspendSSIDs   string                `json:"suspendSSIDs,omitempty"`
 	NoNotify       bool                  `json:"noNotify,omitempty"`
 	Selections     []savedSelection      `json:"selections,omitempty"`
+	Shortcuts      map[string]string     `json:"shortcuts,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
 	// Legacy single-subscription field, migrated into Profiles on load.
 	SubscriptionURL string `json:"subscriptionURL,omitempty"`
@@ -113,6 +113,7 @@ func loadSettings(dir string) *settings {
 		updateInterval: 360,
 		benchmarkURL:   defaultBenchmarkURL,
 		proxyBypass:    defaultProxyBypass,
+		shortcuts:      map[string]string{},
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
 	if err != nil {
@@ -146,6 +147,9 @@ func loadSettings(dir string) *settings {
 	s.suspendSSIDs = w.SuspendSSIDs
 	s.noNotify = w.NoNotify
 	s.selections = w.Selections
+	if w.Shortcuts != nil {
+		s.shortcuts = w.Shortcuts
+	}
 	s.proxyBackup = w.ProxyBackup
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
@@ -205,6 +209,7 @@ func saveSettings(dir string, s *settings) {
 		SuspendSSIDs:   s.suspendSSIDs,
 		NoNotify:       s.noNotify,
 		Selections:     s.selections,
+		Shortcuts:      s.shortcuts,
 		ProxyBackup:    s.proxyBackup,
 		ShowTraffic:    &s.showTraffic,
 	}
@@ -215,65 +220,68 @@ func saveSettings(dir string, s *settings) {
 	_ = os.WriteFile(filepath.Join(dir, "app.json"), data, 0o644)
 }
 
-// settingsPane is the Settings tab of the panel: endpoints, secret,
-// config profile and a Start at login switch.
+// settingsPane is the 通用 page, laid out like ClashX Meta's: compact rows
+// with the label left and the control right, grouped in rounded boxes.
 func (p *panelApp) settingsPane(c *ui.Context) {
 	s := p.app.settings
-	ui.Column(c).FillWidth().Gap(10).Children(func() {
-		ui.Text(c, "核心端点").FontSize(13).Bold()
-		field.Field(c, field.Props{Label: "混合端口", Hint: "HTTP/SOCKS5 代理端口"}, func() {
-			input.Input(c, input.Props{Value: &s.mixedPort})
-		})
-		field.Field(c, field.Props{Label: "外部控制器", Hint: "控制器 API 监听端口"}, func() {
-			input.Input(c, input.Props{Value: &s.controller})
-		})
-		field.Field(c, field.Props{Label: "密钥", Hint: "控制器 API 的 Bearer 令牌；留空则沿用配置文件"}, func() {
-			input.Input(c, input.Props{Value: &s.secret, Placeholder: "可选"})
-		})
-		switcher.Switch(c, switcher.Props{
-			On:    &s.ipv6,
-			Label: "启用 IPv6",
-			Changed: func(bool) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Gap(12).Children(func() {
+		settingsGroup(c, "", func() {
+			ui.Checkbox(c, &s.startAtLogin, "开机启动").OnChange(func() {
+				if err := mygo.App.SetOpenAtLogin(s.startAtLogin); err != nil {
+					// Roll the check box back and surface the error.
+					s.startAtLogin = !s.startAtLogin
+					p.app.showToast("开机启动", "无法修改登录项："+err.Error())
+					return
+				}
 				saveSettings(coreDir(), p.app.settings)
-			},
+			})
+			ui.Checkbox(c, &s.noNotify, "减少通知").OnChange(func() {
+				saveSettings(coreDir(), p.app.settings)
+			})
 		})
-		field.Field(c, field.Props{Label: "代理延迟测试地址", Hint: "节点测速使用的 URL"}, func() {
-			input.Input(c, input.Props{Value: &s.benchmarkURL, Placeholder: defaultBenchmarkURL})
+		ui.Text(c, "Clash 设置（保存并重启核心后生效）").FontSize(11).TextColor(t.TextMuted)
+		settingsGroup(c, "", func() {
+			ui.Checkbox(c, &s.ipv6, "启用 IPv6").OnChange(func() {
+				saveSettings(coreDir(), p.app.settings)
+			})
+			settingsRow(c, "代理端口", func() {
+				ui.TextInput(c, &s.mixedPort).Width(150)
+			})
+			settingsRow(c, "Api 端口", func() {
+				ui.TextInput(c, &s.controller).Width(150)
+			})
+			settingsRow(c, "Api 密钥", func() {
+				ui.TextInput(c, &s.secret).Width(150).Placeholder("可选")
+			})
+			ui.Checkbox(c, &s.allowLAN, "允许局域网控制（不推荐）").OnChange(func() {
+				saveSettings(coreDir(), p.app.settings)
+			})
 		})
-		field.Field(c, field.Props{Label: "特定 WiFi 下自动暂停", Hint: "SSID 用英文逗号分隔；命中时暂时关闭系统代理与 Tun"}, func() {
-			input.Input(c, input.Props{Value: &s.suspendSSIDs, Placeholder: "例如: CompanyWiFi,Home-5G"})
+		settingsGroup(c, "在特定 WiFi SSID 下自动暂停", func() {
+			ui.Text(c, "使用英文逗号 (,) 分隔").FontSize(11).TextColor(t.TextMuted)
+			ui.TextInput(c, &s.suspendSSIDs)
 		})
-		field.Field(c, field.Props{Label: "忽略这些主机与域的代理设置", Hint: "逗号分隔；系统代理的 bypass 列表"}, func() {
-			ui.Column(c).FillWidth().Gap(6).Children(func() {
-				input.Input(c, input.Props{Value: &s.proxyBypass})
-				ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-					button.Button(c, button.Props{
-						Label:   "重置",
-						Variant: button.Outline,
-						OnClick: func() {
-							s.proxyBypass = defaultProxyBypass
-							saveSettings(coreDir(), p.app.settings)
-							p.app.win.Update(func() {})
-						},
-					})
+		settingsGroup(c, "代理延迟测试地址", func() {
+			ui.TextInput(c, &s.benchmarkURL).Placeholder(defaultBenchmarkURL)
+		})
+		settingsGroup(c, "忽略这些主机与域的代理设置", func() {
+			ui.Text(c, "使用英文逗号 (,) 分隔").FontSize(11).TextColor(t.TextMuted)
+			ui.TextInput(c, &s.proxyBypass)
+			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
+				ui.Button(c, "重置").OnClick(func() {
+					s.proxyBypass = defaultProxyBypass
+					saveSettings(coreDir(), p.app.settings)
+					p.app.win.Update(func() {})
 				})
 			})
 		})
-		switcher.Switch(c, switcher.Props{
-			On:    &s.noNotify,
-			Label: "减少通知",
-			Changed: func(bool) {
-				saveSettings(coreDir(), p.app.settings)
-			},
-		})
-		ui.Divider(c)
-		field.Field(c, field.Props{Label: "本地配置", Hint: "加载本地 config.yaml（选择后停用托管订阅）"}, func() {
-			ui.Row(c).Gap(6).Children(func() {
-				input.Input(c, input.Props{Value: &s.configPath, Placeholder: "config.yaml 路径"}).Grow(1)
-				button.Button(c, button.Props{
-					Label:   "浏览…",
-					Variant: button.Outline,
-					OnClick: func() {
+		ui.Text(c, "配置文件").FontSize(11).TextColor(t.TextMuted)
+		settingsGroup(c, "", func() {
+			settingsRow(c, "本地配置", func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.TextInput(c, &s.configPath).Width(240).Placeholder("config.yaml")
+					ui.Button(c, "浏览…").OnClick(func() {
 						files, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 							Title:   "选择 Clash 配置",
 							Filters: []mygo.FileFilter{{Name: "YAML 配置", Extensions: []string{"yaml", "yml"}}},
@@ -281,30 +289,18 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 						if err == nil && len(files) > 0 {
 							s.configPath = files[0]
 						}
-					},
+					})
 				})
 			})
-		})
-		switcher.Switch(c, switcher.Props{
-			On:    &s.startAtLogin,
-			Label: "开机启动",
-			Changed: func(on bool) {
-				if err := mygo.App.SetOpenAtLogin(on); err != nil {
-					// Roll the switch back and surface the error.
-					s.startAtLogin = !on
-					p.app.showToast("开机启动", "无法修改登录项："+err.Error())
-					return
-				}
-				saveSettings(coreDir(), p.app.settings)
-			},
-		})
-		ui.Row(c).FillWidth().Gap(6).Justify(ui.End).Children(func() {
-			button.Button(c, button.Props{
-				Label:   "保存并重启核心",
-				Variant: button.Primary,
-				OnClick: func() {
-					p.saveAndRestart()
-				},
+			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
+				button.Button(c, button.Props{
+					Label:   "保存并重启核心",
+					Variant: button.Primary,
+					Size:    button.Sm,
+					OnClick: func() {
+						p.saveAndRestart()
+					},
+				})
 			})
 		})
 	})

@@ -32,26 +32,41 @@ func testApp(t *testing.T) *app {
 func TestPanelSettings(t *testing.T) {
 	a := testApp(t)
 	p := &panelApp{app: a}
-	tt := ui.NewTester(p.view, 420, 700)
-	if !tt.HasText("ClashX 设置") {
-		t.Errorf("settings title not rendered, texts %q", tt.Texts())
+	tt := ui.NewTester(p.view, 520, 720)
+	for _, tab := range []string{"通用", "全局快捷键", "调试", "Meta"} {
+		if !tt.HasText(tab) {
+			t.Errorf("tab %q missing, texts %q", tab, tt.Texts())
+		}
 	}
-	if !tt.HasText("核心端点") {
-		t.Errorf("settings header not rendered, texts %q", tt.Texts())
-	}
-	if !tt.HasText("混合端口") {
+	if !tt.HasText("代理端口") {
 		t.Errorf("mixed port field missing, texts %q", tt.Texts())
 	}
 	if !tt.HasText("保存并重启核心") {
 		t.Errorf("save button missing, texts %q", tt.Texts())
 	}
-	for _, want := range []string{"启用 IPv6", "代理延迟测试地址", "特定 WiFi 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "重置"} {
+	for _, want := range []string{"启用 IPv6", "允许局域网控制（不推荐）", "代理延迟测试地址", "在特定 WiFi SSID 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "重置"} {
 		if !tt.HasText(want) {
 			t.Errorf("meta general setting %q missing, texts %q", want, tt.Texts())
 		}
 	}
 	if tt.HasText("概览") || tt.HasText("暂无策略组。") {
 		t.Errorf("legacy panel panes still rendered, texts %q", tt.Texts())
+	}
+}
+
+// TestPanelTabs renders the shortcuts, debug and Meta tabs.
+func TestPanelTabs(t *testing.T) {
+	a := testApp(t)
+	for tab, want := range map[int]string{
+		tabShortcuts: "系统代理",
+		tabDebug:     "还原系统代理",
+		tabMeta:      "Meta Core: " + core.CoreVersion,
+	} {
+		p := &panelApp{app: a, tab: tab}
+		tt := ui.NewTester(p.view, 520, 720)
+		if !tt.HasText(want) {
+			t.Errorf("tab %d missing %q, texts %q", tab, want, tt.Texts())
+		}
 	}
 }
 

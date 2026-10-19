@@ -292,6 +292,12 @@ func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 		a.reportError("系统代理", "核心未运行，开启后浏览器会断网；请先启动核心。")
 		return
 	}
+	a.setSystemProxy(on)
+}
+
+// setSystemProxy enables or restores the system proxy; shared by the menu
+// item and the global shortcut.
+func (a *app) setSystemProxy(on bool) {
 	go func() {
 		if on {
 			if a.settings.proxyBackup == nil {
@@ -302,7 +308,9 @@ func (a *app) setSystemProxyToggle(it *mygo.MenuItem) {
 			if err := pointProxyAt(a.mixedPort(), splitList(a.settings.proxyBypass)); err != nil {
 				a.settings.systemProxy = false
 				saveSettings(coreDir(), a.settings)
-				a.menu.sysProxy.SetChecked(false)
+				if a.menu != nil && a.menu.sysProxy != nil {
+					a.menu.sysProxy.SetChecked(false)
+				}
 				a.refreshTrayIcon()
 				a.reportError("系统代理", err.Error())
 				return
@@ -361,7 +369,14 @@ func (a *app) setLANToggle(it *mygo.MenuItem) {
 // switch is a hot API patch (ClashX-instant); otherwise it persists the
 // setting and restarts the core, rolling back if the restart fails.
 func (a *app) setTUNToggle(it *mygo.MenuItem) {
-	on := it.IsChecked()
+	a.setTUN(it.IsChecked())
+}
+
+// setTUN flips Tun mode; shared by the menu item and the global shortcut.
+// With a privileged core already running the switch is a hot API patch
+// (ClashX-instant); otherwise it persists the setting and restarts the
+// core, rolling back if the restart fails.
+func (a *app) setTUN(on bool) {
 	a.settings.tun = on
 	saveSettings(coreDir(), a.settings)
 	a.refreshTrayIcon()
