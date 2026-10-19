@@ -433,7 +433,9 @@ func (a *app) selectProxy(group, member string) {
 	defer cancel()
 	if err := a.ctrl.SelectProxy(ctx, group, member); err != nil {
 		a.reportError("切换节点失败", err.Error())
+		return
 	}
+	a.recordSelection(group, member)
 }
 
 func (a *app) updateSubscription() {

@@ -33,6 +33,14 @@ type subscriptionProfile struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// savedSelection remembers a proxy group's chosen member per config, so a
+// reload or config switch replays it like ClashX Meta's SavedProxyModel.
+type savedSelection struct {
+	Config   string `json:"config"`
+	Group    string `json:"group"`
+	Selected string `json:"selected"`
+}
+
 // settings holds the editable controller configuration.
 type settings struct {
 	mixedPort      string
@@ -48,6 +56,7 @@ type settings struct {
 	allowLAN       bool
 	showTraffic    bool
 	tun            bool
+	selections     []savedSelection
 	// proxyBackup is the user's own system-proxy config captured before we
 	// overwrote it; restoring it beats switching ours off.
 	proxyBackup *systemProxyBackup
@@ -70,6 +79,7 @@ type settingsJSON struct {
 	AllowLAN       bool                  `json:"allowLAN"`
 	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
 	TUN            bool                  `json:"tun"`
+	Selections     []savedSelection      `json:"selections,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
 	// Legacy single-subscription field, migrated into Profiles on load.
 	SubscriptionURL string `json:"subscriptionURL,omitempty"`
@@ -106,6 +116,7 @@ func loadSettings(dir string) *settings {
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
 	s.tun = w.TUN
+	s.selections = w.Selections
 	s.proxyBackup = w.ProxyBackup
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
@@ -148,6 +159,7 @@ func saveSettings(dir string, s *settings) {
 		SystemProxy:    s.systemProxy,
 		AllowLAN:       s.allowLAN,
 		TUN:            s.tun,
+		Selections:     s.selections,
 		ProxyBackup:    s.proxyBackup,
 		ShowTraffic:    &s.showTraffic,
 	}

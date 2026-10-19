@@ -7,7 +7,9 @@ import (
 	"image/png"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -82,6 +84,77 @@ func inPaw(x, y float64) bool {
 	return false
 }
 
+var (
+	glyphOnce   sync.Once
+	glyphImg    *image.NRGBA
+	glyphBounds image.Rectangle
+)
+
+// loadCustomGlyph reads menuImage.png from the config folder — ClashX
+// Meta's custom status-icon override — cropped to its opaque bounds.
+func loadCustomGlyph() {
+	data, err := os.ReadFile(filepath.Join(coreDir(), "menuImage.png"))
+	if err != nil {
+		return
+	}
+	src, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	n := image.NewNRGBA(src.Bounds())
+	draw.Draw(n, n.Bounds(), src, src.Bounds().Min, draw.Src)
+	min := image.Point{X: 1 << 30, Y: 1 << 30}
+	max := image.Point{}
+	for y := n.Bounds().Min.Y; y < n.Bounds().Max.Y; y++ {
+		for x := n.Bounds().Min.X; x < n.Bounds().Max.X; x++ {
+			if n.NRGBAAt(x, y).A == 0 {
+				continue
+			}
+			if x < min.X {
+				min.X = x
+			}
+			if y < min.Y {
+				min.Y = y
+			}
+			if x > max.X {
+				max.X = x
+			}
+			if y > max.Y {
+				max.Y = y
+			}
+		}
+	}
+	if min.X > max.X {
+		return
+	}
+	glyphImg, glyphBounds = n, image.Rect(min.X, min.Y, max.X+1, max.Y+1)
+}
+
+// drawGlyph paints the status mark: the custom menuImage.png when present,
+// otherwise the built-in paw, tinted with ink and fitted into box.
+func drawGlyph(dst *image.RGBA, box image.Rectangle, ink color.NRGBA) {
+	glyphOnce.Do(loadCustomGlyph)
+	if glyphImg == nil {
+		drawPaw(dst, box, ink)
+		return
+	}
+	scale := math.Min(float64(box.Dx())/float64(glyphBounds.Dx()),
+		float64(box.Dy())/float64(glyphBounds.Dy()))
+	w := max(1, int(float64(glyphBounds.Dx())*scale+0.5))
+	h := max(1, int(float64(glyphBounds.Dy())*scale+0.5))
+	tinted := image.NewNRGBA(image.Rect(0, 0, w, h))
+	draw.ApproxBiLinear.Scale(tinted, tinted.Bounds(), glyphImg, glyphBounds, draw.Src, nil)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			_, _, _, a := tinted.At(x, y).RGBA()
+			tinted.SetNRGBA(x, y, color.NRGBA{R: ink.R, G: ink.G, B: ink.B, A: uint8(a >> 8)})
+		}
+	}
+	x0 := box.Min.X + (box.Dx()-w)/2
+	y0 := box.Min.Y + (box.Dy()-h)/2
+	draw.Draw(dst, image.Rect(x0, y0, x0+w, y0+h), tinted, tinted.Bounds().Min, draw.Over)
+}
+
 func inEllipse(e pawEllipse, x, y float64) bool {
 	dx, dy := x-e.cx, y-e.cy
 	if e.rot != 0 {
@@ -130,12 +203,14 @@ func traySpeedIcon(up, down string, active bool) []byte {
 	width := ringW + gap + arrowW + 2 + textW + pad
 	img := image.NewRGBA(image.Rect(0, 0, width, h))
 	textX := ringW + gap + arrowW + 2
-	pawInk := color.NRGBA{A: 255}
+	alpha := uint8(255)
 	if !active {
-		pawInk.A = 110
+		// ClashX Meta dims the whole status item (icon and both speed
+		// lines share one disabled colour) while no proxy is active.
+		alpha = 110
 	}
-	drawPaw(img, image.Rect(0, 0, ringW, h), pawInk)
-	ink := image.NewUniform(color.NRGBA{A: 255})
+	drawGlyph(img, image.Rect(0, 0, ringW, h), color.NRGBA{A: alpha})
+	ink := image.NewUniform(color.NRGBA{A: alpha})
 	drawTrayText(img, f, ink, "↑", ringW+gap+arrowW, 20)
 	drawTrayText(img, f, ink, "↓", ringW+gap+arrowW, 44)
 	drawTrayTextLeft(img, f, ink, up, textX, 20)

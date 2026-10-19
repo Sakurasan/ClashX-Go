@@ -32,6 +32,10 @@ func NewClient(controllerPort int, secret string) *Client {
 
 // do performs a request, attaching the bearer token.
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doWith(ctx, c.HTTP, method, path, body)
+}
+
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, body)
 	if err != nil {
 		return nil, err
@@ -42,7 +46,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return c.HTTP.Do(req)
+	return hc.Do(req)
 }
 
 // Ping returns whether the controller answers.
@@ -275,11 +279,16 @@ func (c *Client) SelectProxy(ctx context.Context, group, member string) error {
 	return nil
 }
 
+// reloadHTTP has no short deadline: mihomo answers PUT /configs only after
+// the new config's providers finish initialising (seconds, occasionally
+// longer on a cold cache). The caller's context still bounds the wait.
+var reloadHTTP = &http.Client{Timeout: 2 * time.Minute}
+
 // Reload asks the running core to re-read a config file in place
 // (PUT /configs {"path"}), the zero-downtime reload path.
 func (c *Client) Reload(ctx context.Context, path string) error {
 	body := strings.NewReader(fmt.Sprintf(`{"path":%q}`, path))
-	resp, err := c.do(ctx, http.MethodPut, "/configs", body)
+	resp, err := c.doWith(ctx, reloadHTTP, http.MethodPut, "/configs", body)
 	if err != nil {
 		return err
 	}

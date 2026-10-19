@@ -232,22 +232,7 @@ func providerBlock(localFile, url string) string {
 func (c Config) WriteYAML(dir string) (string, error) {
 	path := filepath.Join(dir, "config.yaml")
 	var b strings.Builder
-	fmt.Fprintf(&b, "mixed-port: %d\n", c.MixedPort)
-	fmt.Fprintf(&b, "external-controller: 127.0.0.1:%d\n", c.ControllerPort)
-	if c.Secret != "" {
-		fmt.Fprintf(&b, "secret: %s\n", c.Secret)
-	}
-	fmt.Fprintf(&b, "allow-lan: %t\n", c.AllowLAN)
-	fmt.Fprintf(&b, "mode: %s\n", c.Mode)
-	if c.ExternalUI != "" {
-		fmt.Fprintf(&b, "external-ui: %s\n", c.ExternalUI)
-	}
-	b.WriteString("ipv6: false\n")
-	b.WriteString("log-level: info\n")
-	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
-		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
-	fmt.Fprintf(&b, "tun:\n  enable: %t\n  stack: system\n"+
-		"  strict-route: false\n  dns-hijack:\n    - any:53\n", c.TUN)
+	c.writeBase(&b)
 
 	switch {
 	case c.ConfigPath != "":
@@ -265,6 +250,41 @@ func (c Config) WriteYAML(dir string) (string, error) {
 	default:
 		b.WriteString("rules:\n  - MATCH,DIRECT\n")
 	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// writeBase renders the app-managed header: endpoints, ports, DNS and TUN.
+func (c Config) writeBase(b *strings.Builder) {
+	fmt.Fprintf(b, "mixed-port: %d\n", c.MixedPort)
+	fmt.Fprintf(b, "external-controller: 127.0.0.1:%d\n", c.ControllerPort)
+	if c.Secret != "" {
+		fmt.Fprintf(b, "secret: %s\n", c.Secret)
+	}
+	fmt.Fprintf(b, "allow-lan: %t\n", c.AllowLAN)
+	fmt.Fprintf(b, "mode: %s\n", c.Mode)
+	if c.ExternalUI != "" {
+		fmt.Fprintf(b, "external-ui: %s\n", c.ExternalUI)
+	}
+	b.WriteString("ipv6: false\n")
+	b.WriteString("log-level: info\n")
+	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
+		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
+	fmt.Fprintf(b, "tun:\n  enable: %t\n  stack: system\n"+
+		"  strict-route: false\n  dns-hijack:\n    - any:53\n", c.TUN)
+}
+
+// WriteBootstrapYAML writes the minimal config the core boots with: just
+// the endpoints, TUN and a DIRECT catch-all. ClashX Meta starts this way and
+// pushes the real config over the API once the controller answers, so
+// provider and rule loading never delay the core coming up.
+func (c Config) WriteBootstrapYAML(dir string) (string, error) {
+	path := filepath.Join(dir, "config.yaml")
+	var b strings.Builder
+	c.writeBase(&b)
+	b.WriteString("rules:\n  - MATCH,DIRECT\n")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		return "", err
 	}

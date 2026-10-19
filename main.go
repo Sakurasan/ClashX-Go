@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -134,6 +135,7 @@ func (a *app) ready() {
 	// Boot the core in the background on launch.
 	go a.startCore()
 	go a.autoUpdateLoop(context.Background())
+	go a.watchConfigSource()
 }
 
 // onState marshals onto the main thread with an async post (never a
@@ -196,13 +198,134 @@ func (a *app) startCoreLocked() error {
 		a.ctrl.SetSubDownloading(true)
 	}
 	err := a.ctrl.Start(context.Background())
+	if err != nil && !core.PortAvailable(a.apiPort()) {
+		// ClashX Meta shifts to the next free port instead of refusing to
+		// start; persist the new controller port and retry once.
+		next := core.NextFreePort(a.apiPort() + 1)
+		if next > a.apiPort() {
+			log.Printf("控制器端口 %d 被占用，改用 %d", a.apiPort(), next)
+			a.settings.controller = strconv.Itoa(next)
+			saveSettings(coreDir(), a.settings)
+			a.ctrl = core.NewController(a.ctrl.Manager(), a.settingsConfig())
+			a.ctrl.OnChange(a.onState)
+			err = a.ctrl.Start(context.Background())
+		}
+	}
 	a.ctrl.SetSubDownloading(false)
 	if err == nil {
-		// Boot on the stored copy; a stale subscription refreshes and
-		// live-reloads in the background instead of delaying startup.
-		go a.refreshActiveSubIfStale()
+		go a.postStartConfig()
 	}
 	return err
+}
+
+// postStartConfig pushes the real config after the core answered on its
+// bootstrap config, then refreshes a stale subscription and restores the
+// remembered node selections.
+func (a *app) postStartConfig() {
+	if a.configSourcePath() != "" {
+		a.reloadLive(a.settingsConfig())
+	}
+	a.refreshActiveSubIfStale()
+}
+
+// configSourcePath is the file driving the running config: the active
+// subscription's copy or the local config picked by the user.
+func (a *app) configSourcePath() string {
+	if p := a.activeSub(); p != nil {
+		return filepath.Join(coreDir(), p.File)
+	}
+	if a.settings != nil && a.settings.configPath != "" {
+		return a.settings.configPath
+	}
+	return ""
+}
+
+// configKey identifies the active config for saved node selections.
+func (a *app) configKey() string {
+	if p := a.activeSub(); p != nil {
+		return p.Name
+	}
+	if a.settings != nil && a.settings.configPath != "" {
+		base := filepath.Base(a.settings.configPath)
+		return strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	return "config"
+}
+
+// recordSelection remembers a group's chosen member so reloads and config
+// switches replay it, like ClashX Meta's SavedProxyModel.
+func (a *app) recordSelection(group, member string) {
+	key := a.configKey()
+	for i := range a.settings.selections {
+		if a.settings.selections[i].Config == key && a.settings.selections[i].Group == group {
+			a.settings.selections[i].Selected = member
+			saveSettings(coreDir(), a.settings)
+			return
+		}
+	}
+	a.settings.selections = append(a.settings.selections,
+		savedSelection{Config: key, Group: group, Selected: member})
+	saveSettings(coreDir(), a.settings)
+}
+
+// replaySelections re-applies remembered members after a config load and
+// drops records that no longer resolve (renamed or removed groups).
+func (a *app) replaySelections() {
+	key := a.configKey()
+	kept := a.settings.selections[:0]
+	dropped := false
+	for _, sel := range a.settings.selections {
+		if sel.Config != key {
+			kept = append(kept, sel)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := a.ctrl.SelectProxy(ctx, sel.Group, sel.Selected)
+		cancel()
+		if err != nil {
+			log.Printf("恢复节点选择失败 %s/%s: %v", sel.Group, sel.Selected, err)
+			dropped = true
+			continue
+		}
+		kept = append(kept, sel)
+	}
+	if dropped {
+		a.settings.selections = kept
+		saveSettings(coreDir(), a.settings)
+	}
+}
+
+// watchConfigSource reloads when the active config file is edited outside
+// the app (ClashX Meta watches the selected config file the same way).
+func (a *app) watchConfigSource() {
+	var lastPath string
+	var lastMod time.Time
+	for {
+		time.Sleep(2 * time.Second)
+		if a.quitting {
+			return
+		}
+		p := a.configSourcePath()
+		if p == "" {
+			lastPath, lastMod = "", time.Time{}
+			continue
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if p != lastPath {
+			lastPath, lastMod = p, fi.ModTime()
+			continue
+		}
+		if fi.ModTime().After(lastMod) {
+			lastMod = fi.ModTime()
+			if a.ctrl.State().Running {
+				log.Printf("配置已变更，后台重载：%s", filepath.Base(p))
+				go a.reloadLive(a.settingsConfig())
+			}
+		}
+	}
 }
 
 // stopCore is the user's explicit stop (panel footer); it cancels the
@@ -251,6 +374,7 @@ func (a *app) reloadLive(cfg core.Config) {
 		return
 	}
 	log.Printf("live reload in %s", time.Since(startedAt).Round(time.Millisecond))
+	a.replaySelections()
 	// ClashX closes established chains after a config change so new
 	// routing applies immediately to persistent connections.
 	go a.closeConnections()
@@ -278,6 +402,7 @@ func (a *app) restartCore(cfg core.Config) error {
 		}()
 		return err
 	}
+	go a.postStartConfig()
 	log.Printf("core restarted in %s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
@@ -338,11 +463,12 @@ func (a *app) show() {
 	a.win.Show()
 }
 
-// trayIcon renders the paw-print mark tinted with ink on a 32px canvas —
-// black for the template (system-tinted) stopped icon.
+// trayIcon renders the status mark (custom menuImage.png or the paw)
+// tinted with ink on a 32px canvas — black for the template
+// (system-tinted) stopped icon.
 func trayIcon(ink color.NRGBA) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
-	drawPaw(img, img.Rect, ink)
+	drawGlyph(img, img.Rect, ink)
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	return b.Bytes()

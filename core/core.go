@@ -227,7 +227,10 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 			break
 		}
 	}
-	configPath, err := runtimeConfigPath(m.dir, cfg)
+	// Boot with the minimal bootstrap config (endpoints, TUN, DIRECT
+	// catch-all); the app pushes the real config over the API as soon as
+	// the controller answers, like ClashX Meta.
+	configPath, err := cfg.WriteBootstrapYAML(m.dir)
 	if err != nil {
 		m.mu.Unlock()
 		return "", err
@@ -472,6 +475,20 @@ func (m *Manager) Stop() {
 // pidPath is where the core's process id is stored so a later run can clean
 // up a core orphaned by a killed app (SIGKILL skips OnWillQuit).
 func (m *Manager) pidPath() string { return filepath.Join(m.dir, "core.pid") }
+
+// PortAvailable reports whether a localhost TCP port can be bound.
+func PortAvailable(port int) bool { return portAvailable(port) }
+
+// NextFreePort returns the first bindable port from start upwards, or start
+// when none is found.
+func NextFreePort(start int) int {
+	for p := start; p < 65535; p++ {
+		if portAvailable(p) {
+			return p
+		}
+	}
+	return start
+}
 
 // portAvailable reports whether a TCP port can be bound on localhost.
 func portAvailable(port int) bool {
