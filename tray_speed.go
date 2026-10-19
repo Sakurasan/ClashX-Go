@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"embed"
 	"image"
 	"image/color"
 	"image/png"
@@ -19,8 +20,11 @@ import (
 )
 
 // The tray title cannot show two lines, so — like ClashX's StatusItemView —
-// we compose the whole status item (paw icon + upload above download)
+// we compose the whole status item (icon + upload above download)
 // into one template bitmap and set it as the tray icon.
+
+//go:embed assets/menu_icon@2x.png
+var catAsset embed.FS
 
 // pawEllipse is one rotated ellipse of the paw-print mark in a 24x24 design
 // space (the winning preview, batch 3 option 14).
@@ -90,16 +94,29 @@ var (
 	glyphBounds image.Rectangle
 )
 
-// loadCustomGlyph reads menuImage.png from the config folder — ClashX
-// Meta's custom status-icon override — cropped to its opaque bounds.
-func loadCustomGlyph() {
-	data, err := os.ReadFile(filepath.Join(coreDir(), "menuImage.png"))
+// loadGlyph picks the status mark: the user's menuImage.png override when
+// present, otherwise ClashX Meta's own cat silhouette. Both are cropped to
+// their opaque bounds so the glyph, not its canvas, fills the icon box.
+func loadGlyph() {
+	if data, err := os.ReadFile(filepath.Join(coreDir(), "menuImage.png")); err == nil {
+		if img, box, ok := decodeCropped(data); ok {
+			glyphImg, glyphBounds = img, box
+			return
+		}
+	}
+	data, err := catAsset.ReadFile("assets/menu_icon@2x.png")
 	if err != nil {
 		return
 	}
+	if img, box, ok := decodeCropped(data); ok {
+		glyphImg, glyphBounds = img, box
+	}
+}
+
+func decodeCropped(data []byte) (*image.NRGBA, image.Rectangle, bool) {
 	src, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		return
+		return nil, image.Rectangle{}, false
 	}
 	n := image.NewNRGBA(src.Bounds())
 	draw.Draw(n, n.Bounds(), src, src.Bounds().Min, draw.Src)
@@ -125,15 +142,16 @@ func loadCustomGlyph() {
 		}
 	}
 	if min.X > max.X {
-		return
+		return nil, image.Rectangle{}, false
 	}
-	glyphImg, glyphBounds = n, image.Rect(min.X, min.Y, max.X+1, max.Y+1)
+	return n, image.Rect(min.X, min.Y, max.X+1, max.Y+1), true
 }
 
-// drawGlyph paints the status mark: the custom menuImage.png when present,
-// otherwise the built-in paw, tinted with ink and fitted into box.
+// drawGlyph paints the status mark (menuImage.png, the embedded cat, or —
+// only if both fail to decode — the built-in paw), tinted with ink and
+// fitted into box.
 func drawGlyph(dst *image.RGBA, box image.Rectangle, ink color.NRGBA) {
-	glyphOnce.Do(loadCustomGlyph)
+	glyphOnce.Do(loadGlyph)
 	if glyphImg == nil {
 		drawPaw(dst, box, ink)
 		return
@@ -147,7 +165,10 @@ func drawGlyph(dst *image.RGBA, box image.Rectangle, ink color.NRGBA) {
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			_, _, _, a := tinted.At(x, y).RGBA()
-			tinted.SetNRGBA(x, y, color.NRGBA{R: ink.R, G: ink.G, B: ink.B, A: uint8(a >> 8)})
+			// Source coverage times the ink's opacity: the icon dims with
+			// the rest of the status item when no proxy is active.
+			alpha := uint8(uint32(a>>8) * uint32(ink.A) / 255)
+			tinted.SetNRGBA(x, y, color.NRGBA{R: ink.R, G: ink.G, B: ink.B, A: alpha})
 		}
 	}
 	x0 := box.Min.X + (box.Dx()-w)/2
@@ -190,9 +211,9 @@ func trayFont() font.Face {
 // column and the speeds left-aligned just after them. SFNS is proportional,
 // so the %9s padding from humanSpeed is meaningless here — leading spaces
 // are trimmed. The text column is reserved at the widest 3-digit readout
-// ("88.8M/s"), so the paw and arrows never shift in the menu bar as the
+// ("88.8M/s"), so the icon and arrows never shift in the menu bar as the
 // numbers change; only the digits move inside their column. When neither
-// system proxy nor TUN is active the paw is dimmed, matching ClashX Meta.
+// system proxy nor TUN is active the whole item dims, matching ClashX Meta.
 func traySpeedIcon(up, down string, active bool) []byte {
 	f := trayFont()
 	up, down = strings.TrimLeft(up, " "), strings.TrimLeft(down, " ")
