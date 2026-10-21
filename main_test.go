@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -38,7 +40,7 @@ func TestPanelSettings(t *testing.T) {
 	a := testApp(t)
 	p := &panelApp{app: a}
 	tt := ui.NewTester(p.view, 520, 720)
-	for _, tab := range []string{"通用", "全局快捷键", "调试", "Meta"} {
+	for _, tab := range []string{"通用", "连接", "分流", "全局快捷键", "调试", "Meta"} {
 		if !tt.HasText(tab) {
 			t.Errorf("tab %q missing, texts %q", tab, tt.Texts())
 		}
@@ -63,6 +65,7 @@ func TestPanelSettings(t *testing.T) {
 func TestPanelTabs(t *testing.T) {
 	a := testApp(t)
 	for tab, want := range map[int]string{
+		tabRouting:   "应用规则",
 		tabShortcuts: "系统代理",
 		tabDebug:     "还原系统代理",
 		tabMeta:      "Meta Core: " + core.CoreVersion,
@@ -71,6 +74,9 @@ func TestPanelTabs(t *testing.T) {
 		tt := ui.NewTester(p.view, 520, 720)
 		if !tt.HasText(want) {
 			t.Errorf("tab %d missing %q, texts %q", tab, want, tt.Texts())
+		}
+		if tab == tabMeta && !tt.HasText("Tun DNS") {
+			t.Errorf("Meta tab missing Tun DNS, texts %q", tt.Texts())
 		}
 	}
 }
@@ -116,8 +122,8 @@ func TestTrayMenu(t *testing.T) {
 }
 
 func TestAboutView(t *testing.T) {
-	tt := ui.NewTester(aboutView, 420, 420)
-	for _, want := range []string{"ClashX Go", "版本: 0.1.0", "Meta Core: " + core.CoreVersion, "GitHub for Clash Meta"} {
+	tt := ui.NewTester(aboutView, 400, 460)
+	for _, want := range []string{"ClashX Go", "版本: 0.2.0", "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
 		if !tt.HasText(want) {
 			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
 		}
@@ -214,6 +220,161 @@ func TestDiagnosticsRedaction(t *testing.T) {
 	}
 }
 
+// Selecting an .app reads the executable and display name from its
+// Info.plist; the executable is what PROCESS-NAME matches.
+func TestAppBundleInfo(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("reads Info.plist with plutil")
+	}
+	app := filepath.Join(t.TempDir(), "Test App.app")
+	if err := os.MkdirAll(filepath.Join(app, "Contents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>TestApp</string>
+<key>CFBundleDisplayName</key><string>Test App Display</string>
+</dict></plist>`
+	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, process := appBundleInfo(app)
+	if process != "TestApp" {
+		t.Errorf("process = %q, want TestApp", process)
+	}
+	if name != "Test App Display" {
+		t.Errorf("name = %q, want Test App Display", name)
+	}
+}
+
+// The routing pane lists each app with its process name and target choice.
+func TestRoutingPane(t *testing.T) {
+	a := testApp(t)
+	a.settings.appRules = []appRoutingRule{
+		{Name: "Telegram", Process: "Telegram", Path: "/Applications/Telegram.app", Target: "proxy"},
+		{Name: "Steam", Process: "steam_osx", Path: "/Applications/Steam.app", Target: "direct"},
+	}
+	p := &panelApp{app: a}
+	tt := ui.NewTester(p.routingPane, 520, 620)
+	for _, want := range []string{"Telegram", "PROCESS-NAME Telegram", "steam_osx", "直连", "代理", "添加应用…", "保存并应用"} {
+		if !tt.HasText(want) {
+			t.Errorf("routing pane missing %q, texts %q", want, tt.Texts())
+		}
+	}
+	if a.settings.appRules[0].Target != "proxy" {
+		t.Errorf("target mutated during render: %q", a.settings.appRules[0].Target)
+	}
+}
+
+// The connections page names a destination from the sniffed host, else the
+// IP, and always carries the port.
+func TestConnHost(t *testing.T) {
+	cases := []struct {
+		m    core.ConnectionMetadata
+		want string
+	}{
+		{core.ConnectionMetadata{Host: "example.com", DestinationPort: "443"}, "example.com:443"},
+		{core.ConnectionMetadata{SniffHost: "sniffed.io", DestinationIP: "1.2.3.4", DestinationPort: "80"}, "sniffed.io:80"},
+		{core.ConnectionMetadata{DestinationIP: "1.1.1.1", DestinationPort: "53"}, "1.1.1.1:53"},
+		{core.ConnectionMetadata{DestinationIP: "2606:4700::1111", DestinationPort: "443"}, "[2606:4700::1111]:443"},
+		{core.ConnectionMetadata{}, "—"},
+	}
+	for _, tc := range cases {
+		if got := connHost(core.Connection{Metadata: tc.m}); got != tc.want {
+			t.Errorf("connHost(%+v) = %q, want %q", tc.m, got, tc.want)
+		}
+	}
+}
+
+// The search box matches host, process, rule and chain and keeps the
+// newest-first order of the snapshot.
+func TestFilteredConnections(t *testing.T) {
+	p := &panelApp{connSel: -1, conns: &core.Connections{Connections: []core.Connection{
+		{ID: "new", Metadata: core.ConnectionMetadata{Host: "example.com", Process: "Safari"}, RulePayload: "example.com"},
+		{ID: "old", Metadata: core.ConnectionMetadata{Host: "api.test", Process: "curl"}, Chains: []string{"HK", "PROXY"}},
+	}}}
+	if got := p.filteredConnections(); len(got) != 2 || got[0].ID != "new" {
+		t.Fatalf("unfiltered = %+v", got)
+	}
+	for q, wantID := range map[string]string{
+		"curl":   "old",
+		"Safari": "new",
+		"hK":     "old", // case-insensitive chain match
+	} {
+		p.connFilter = q
+		got := p.filteredConnections()
+		if len(got) != 1 || got[0].ID != wantID {
+			t.Errorf("filter %q = %+v, want %s", q, got, wantID)
+		}
+	}
+	p.connFilter = "nothing-matches"
+	if got := p.filteredConnections(); len(got) != 0 {
+		t.Errorf("unexpected rows: %+v", got)
+	}
+}
+
+// TestConnectionsView renders the live table and the empty state.
+func TestConnectionsView(t *testing.T) {
+	a := testApp(t)
+	p := &panelApp{app: a, connSel: -1}
+	p.conns = &core.Connections{
+		DownloadTotal: 2048,
+		UploadTotal:   1024,
+		Connections: []core.Connection{{
+			ID:          "c1",
+			Start:       time.Unix(100, 0),
+			Metadata:    core.ConnectionMetadata{Host: "example.com", DestinationPort: "443", Process: "Safari"},
+			Chains:      []string{"HK", "PROXY"},
+			Rule:        "DomainSuffix",
+			RulePayload: "example.com",
+			Download:    2 * 1024,
+			Upload:      100,
+		}},
+	}
+	tt := ui.NewTester(p.activeConnsView, 520, 620)
+	for _, want := range []string{"活动连接 1", "example.com:443", "HK → PROXY", "双击一行查看连接详情"} {
+		if !tt.HasText(want) {
+			t.Errorf("connections page missing %q, texts %q", want, tt.Texts())
+		}
+	}
+
+	p.conns = nil
+	tt = ui.NewTester(p.activeConnsView, 520, 620)
+	if !tt.HasText("正在读取连接…") {
+		t.Errorf("loading state missing, texts %q", tt.Texts())
+	}
+}
+
+// The tab renders the core-stopped state, and the rules sub-view keeps the
+// core's matching order.
+func TestConnectionsPaneStates(t *testing.T) {
+	a := testApp(t)
+	p := &panelApp{app: a, tab: tabConnections, connSel: -1}
+	tt := ui.NewTester(p.view, 520, 720)
+	for _, want := range []string{"活动连接", "规则列表", "核心未运行"} {
+		if !tt.HasText(want) {
+			t.Errorf("connections tab missing %q, texts %q", want, tt.Texts())
+		}
+	}
+
+	p.connView = connViewRules
+	p.rules = []core.Rule{
+		{Type: "DomainSuffix", Payload: "example.com", Proxy: "Proxies"},
+		{Type: "MATCH", Payload: "", Proxy: "DIRECT"},
+	}
+	tt = ui.NewTester(p.rulesView, 520, 620)
+	for _, want := range []string{"DomainSuffix", "example.com", "Proxies", "共 2 条规则"} {
+		if !tt.HasText(want) {
+			t.Errorf("rules view missing %q, texts %q", want, tt.Texts())
+		}
+	}
+	p.ruleFilter = "direct" // case-insensitive policy match
+	if got := p.filteredRules(); len(got) != 1 || got[0].Type != "MATCH" {
+		t.Errorf("filteredRules(direct) = %+v", got)
+	}
+}
+
 func TestMain(m *testing.M) {
 	// Tests assert the Chinese UI; CI runners default to English.
 	os.Setenv("CLASHX_GO_LANG", "zh")
@@ -228,7 +389,7 @@ func TestPanelSettingsEnglish(t *testing.T) {
 	a := testApp(t)
 	p := &panelApp{app: a}
 	tt := ui.NewTester(p.view, 520, 720)
-	for _, want := range []string{"Proxy Port", "Save & Restart Core", "Enable IPv6", "Check for Updates Automatically"} {
+	for _, want := range []string{"Connections", "Proxy Port", "Save & Restart Core", "Enable IPv6", "Check for Updates Automatically"} {
 		if !tt.HasText(want) {
 			t.Errorf("english UI missing %q, texts %q", want, tt.Texts())
 		}

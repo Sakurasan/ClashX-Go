@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -233,18 +234,26 @@ func (m *Manager) Start(ctx context.Context, cfg Config, ping func() error) (str
 		m.mu.Unlock()
 		return "", fmt.Errorf("core is already running")
 	}
+	if n := m.KillOrphanCores(); n > 0 {
+		log.Printf("核心：已清理 %d 个遗留进程", n)
+		time.Sleep(150 * time.Millisecond)
+	}
 	m.killStale()
 	// The web dashboard ships in the bundle; copy it into the working dir
 	// before the external-ui check below (first launch of a fresh install).
 	m.ensureDashboard()
-	// The controller port is ours to bind (we pass -ext-ctl). If another
-	// Clash core already owns it, mihomo would start half-dead and our
-	// ping would answer from the foreign core: fail early instead. A core
-	// we just stopped drains its connections before exiting, so allow a
-	// generous window for the port to come free.
-	if cfg.ControllerPort > 0 && !waitPortFree(cfg.ControllerPort, 20*time.Second) {
-		m.mu.Unlock()
-		return "", fmt.Errorf("端口 %d 已被 %s 占用，请在偏好设置里换一个控制器端口", cfg.ControllerPort, portHolder(cfg.ControllerPort))
+	// The app talks to the core over the Unix socket, which does not care
+	// whether the previous core still holds the TCP controller port. A
+	// private run directory keeps other local users out; the socket itself
+	// is created by mihomo (often root for TUN) with world-writable mode.
+	if cfg.ControllerSocket != "" {
+		dir := filepath.Dir(cfg.ControllerSocket)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			m.mu.Unlock()
+			return "", err
+		}
+		_ = os.Chmod(dir, 0o700)
+		_ = os.Remove(cfg.ControllerSocket)
 	}
 	bin := m.Binary()
 	if _, err := os.Stat(bin); err != nil {
@@ -563,38 +572,51 @@ func portAvailable(port int) bool {
 	return true
 }
 
-// portHolder names the process listening on a TCP port, for error text.
-func portHolder(port int) string {
-	out, err := exec.Command("lsof", "-nP", "-iTCP:"+fmt.Sprint(port), "-sTCP:LISTEN", "-Fpcn").Output()
-	if err != nil || len(out) == 0 {
-		return "其他进程"
+// KillOrphanCores terminates cores left running by an app that was killed
+// before it could stop them. A core orphaned that way keeps the controller
+// and mixed ports bound; waiting for it to exit gracefully made the next
+// launch sit on the port for 20 seconds before falling back. Only processes
+// whose executable is one of our core paths and whose -d is this config dir
+// are touched, never ClashX Meta's core or another instance's.
+func (m *Manager) KillOrphanCores() int {
+	out, err := exec.Command("pgrep", "-x", strings.TrimSuffix(binaryName(), ".exe")).Output()
+	if err != nil {
+		return 0
 	}
-	var name, pid string
-	for _, line := range strings.Split(string(out), "\n") {
-		if v, ok := strings.CutPrefix(line, "p"); ok && pid == "" {
-			pid = v
-		} else if v, ok := strings.CutPrefix(line, "c"); ok && name == "" {
-			name = v
+	own := map[string]bool{
+		filepath.Join(m.dir, binaryName()): true,
+		privilegedCorePath():               true,
+	}
+	killed := 0
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid <= 0 {
+			continue
+		}
+		comm, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil || !own[strings.TrimSpace(string(comm))] {
+			continue
+		}
+		args, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil || !hasDirArg(string(args), m.dir) {
+			continue
+		}
+		if proc, err := os.FindProcess(pid); err == nil {
+			_ = proc.Kill()
+			killed++
 		}
 	}
-	if name == "" {
-		return "其他进程"
-	}
-	return name + " (pid " + pid + ")"
+	return killed
 }
 
-// waitPortFree polls portAvailable until it succeeds or timeout passes.
-func waitPortFree(port int, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if portAvailable(port) {
+func hasDirArg(command, dir string) bool {
+	fields := strings.Fields(command)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "-d" && fields[i+1] == dir {
 			return true
 		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(50 * time.Millisecond)
 	}
+	return false
 }
 
 // killStale terminates a core left over from a previous run.

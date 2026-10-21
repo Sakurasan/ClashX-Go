@@ -36,6 +36,11 @@ type app struct {
 	tray     *mygo.Tray
 	quitting bool
 
+	// activeAPI is the TCP controller port chosen for this run. The
+	// configured port stays untouched, so a port still finishing shutdown
+	// changes only this run's dashboard URL, never the saved preference.
+	activeAPI int
+
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
 	// against a still-finishing operation. reloadMu serialises background
 	// live reloads (a new switch waits for the previous one).
@@ -79,6 +84,7 @@ func (a *app) ready() {
 		log.Fatal("core dir: ", err)
 	}
 	a.settings = loadSettings(dir)
+	a.activeAPI = parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
 	log.Printf("启动：tun=%t systemProxy=%t profile=%q config=%q",
 		a.settings.tun, a.settings.systemProxy, a.settings.activeProfile, a.settings.configPath)
 	// Reflect the real system login-item state so the switch shows the
@@ -112,7 +118,7 @@ func (a *app) ready() {
 			a.tray.PopUpMenu()
 		})
 	}
-	a.panel = &panelApp{app: a}
+	a.panel = &panelApp{app: a, connSel: -1}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:   T("ClashX 设置"),
 		Width:   520,
@@ -126,6 +132,9 @@ func (a *app) ready() {
 			a.win.Hide()
 		}
 	})
+	// Refresh the connections page the moment it becomes visible instead of
+	// waiting for the next poll tick.
+	a.win.OnShow(func() { a.panel.pollConnections() })
 	mygo.App.OnNotificationClick(func(id string) {
 		if id == notificationUpdateID {
 			a.checkForUpdates()
@@ -137,6 +146,9 @@ func (a *app) ready() {
 		// so a stuck quit is diagnosable, and keep every wait bounded (the
 		// helpers time out; see Controller.Stop and networksetup).
 		log.Printf("退出：开始清理")
+		// Put the user's DNS back while TUN is still up, before the core goes
+		// away and leaves the system pointing at an unreachable resolver.
+		a.restoreTunDNSOnQuit()
 		if a.settings != nil && a.settings.systemProxy {
 			if err := restoreProxy(a.settings.proxyBackup); err != nil {
 				log.Printf("退出：还原系统代理失败: %v", err)
@@ -154,11 +166,15 @@ func (a *app) ready() {
 
 	// Boot the core in the background on launch.
 	go a.startCore()
+	// Repair a DNS hijack left behind by a crash; a start in progress
+	// reconciles again once the core answers.
+	go a.reconcileTunDNS()
 	go a.autoUpdateLoop(context.Background())
 	go a.autoUpdateCheckLoop()
 	go a.subscriptionNoticeLoop()
 	go a.watchConfigSource()
 	go a.ssidSuspendLoop()
+	go a.connectionsLoop()
 }
 
 // ssidSuspendLoop pauses the system proxy and TUN while the default route is
@@ -216,6 +232,7 @@ func (a *app) suspendProxies() {
 		_ = a.ctrl.SetTUN(ctx, false)
 		cancel()
 	}
+	a.restoreTunDNS()
 }
 
 // resumeFromSSID re-applies the system proxy (and TUN) that were suspended.
@@ -233,8 +250,11 @@ func (a *app) resumeFromSSID(prevSys bool) {
 	}
 	if a.settings.tun && a.ctrl.State().Running {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = a.ctrl.SetTUN(ctx, true)
+		err := a.ctrl.SetTUN(ctx, true)
 		cancel()
+		if err == nil {
+			a.applyTunDNS()
+		}
 	}
 	a.refreshTrayIcon()
 }
@@ -288,6 +308,13 @@ func (a *app) startCoreLocked() error {
 		// the race, and Manager.Start would only error "already running".
 		return nil
 	}
+	// Release ports held by a core orphaned by a force-quit app before
+	// deciding whether the configured mixed port is free; otherwise we
+	// would needlessly shift to another port (and then kill it anyway).
+	if n := a.ctrl.Manager().KillOrphanCores(); n > 0 {
+		log.Printf("启动核心：清理了 %d 个遗留内核进程", n)
+		time.Sleep(150 * time.Millisecond)
+	}
 	// Re-read settings so a fresh Start uses the current endpoints.
 	if mp := a.mixedPort(); !core.PortAvailable(mp) {
 		// Same as the controller port: shift instead of starting with a
@@ -307,23 +334,16 @@ func (a *app) startCoreLocked() error {
 			}
 		}
 	}
+	// The app's own API uses the Unix socket, but the TCP port still serves
+	// the dashboard: pick a bindable one now (no waiting) so it works.
+	a.chooseControllerPort()
 	a.ctrl = core.NewController(a.ctrl.Manager(), a.settingsConfig())
 	a.ctrl.OnChange(a.onState)
+	log.Printf("启动核心：API %d / 混合 %d / TUN %t", a.apiPort(), a.mixedPort(), a.settings.tun)
+	startedAt := time.Now()
 	err := a.ctrl.Start(context.Background())
-	if err != nil && !core.PortAvailable(a.apiPort()) {
-		// ClashX Meta shifts to the next free port instead of refusing to
-		// start; persist the new controller port and retry once.
-		next := core.NextFreePort(a.apiPort() + 1)
-		if next > a.apiPort() {
-			log.Printf("控制器端口 %d 被占用，改用 %d", a.apiPort(), next)
-			a.settings.controller = strconv.Itoa(next)
-			saveSettings(coreDir(), a.settings)
-			a.ctrl = core.NewController(a.ctrl.Manager(), a.settingsConfig())
-			a.ctrl.OnChange(a.onState)
-			err = a.ctrl.Start(context.Background())
-		}
-	}
 	if err == nil {
+		log.Printf("启动核心：完成 %s", time.Since(startedAt).Round(time.Millisecond))
 		go a.postStartConfig()
 	}
 	return err
@@ -337,6 +357,9 @@ func (a *app) postStartConfig() {
 		a.reloadLive(a.settingsConfig())
 	}
 	a.refreshActiveSubIfStale()
+	// TUN is up (Start verified the utun) and the settings may have come
+	// from a previous run: align the system DNS with them.
+	a.reconcileTunDNS()
 }
 
 // configSourcePath is the file driving the running config: the active
@@ -480,6 +503,8 @@ func (a *app) reloadLive(cfg core.Config) {
 	// ClashX closes established chains after a config change so new
 	// routing applies immediately to persistent connections.
 	go a.closeConnections()
+	// The reload may have turned TUN on or off; keep system DNS in step.
+	go a.reconcileTunDNS()
 }
 
 // restartCore stops the old controller config and starts a new one.
@@ -488,6 +513,9 @@ func (a *app) restartCore(cfg core.Config) error {
 	defer a.coreOp.Unlock()
 	startedAt := time.Now()
 	a.ctrl.Stop()
+	a.chooseControllerPort()
+	cfg.ControllerPort = a.apiPort()
+	cfg.ControllerSocket = filepath.Join(coreDir(), "run", "controller.sock")
 	a.ctrl = core.NewController(a.ctrl.Manager(), cfg)
 	a.ctrl.OnChange(a.onState)
 	if err := a.ctrl.Start(context.Background()); err != nil {
@@ -509,17 +537,43 @@ func (a *app) restartCore(cfg core.Config) error {
 	return nil
 }
 
+// chooseControllerPort picks the TCP controller port (the dashboard's) for
+// this run. The app itself talks over the Unix socket, so a configured port
+// that is still finishing its shutdown only changes this run's dashboard
+// URL; the saved preference stays as the user set it.
+func (a *app) chooseControllerPort() {
+	preferred := parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
+	port := preferred
+	if !core.PortAvailable(port) {
+		if next := core.NextFreePort(port + 1); next > port {
+			port = next
+			log.Printf("控制器端口 %d 暂不可用，本次改用 %d", preferred, port)
+		}
+	}
+	a.activeAPI = port
+}
+
 // settingsConfig builds the controller config from the app settings.
 func (a *app) settingsConfig() core.Config {
 	cfg := core.DefaultConfig()
 	if s := a.settings; s != nil {
 		cfg.MixedPort = parsePort(s.mixedPort, cfg.MixedPort)
-		cfg.ControllerPort = parsePort(s.controller, cfg.ControllerPort)
+		cfg.ControllerPort = a.apiPort()
+		cfg.ControllerSocket = filepath.Join(coreDir(), "run", "controller.sock")
 		cfg.Secret = s.secret
 		cfg.AllowLAN = s.allowLAN
 		cfg.TUN = s.tun
 		cfg.IPv6 = s.ipv6
 		cfg.BenchmarkURL = s.benchmarkURL
+		for _, r := range s.appRules {
+			target := "DIRECT"
+			if strings.EqualFold(r.Target, "proxy") {
+				target = "PROXY"
+			}
+			cfg.ProcessRules = append(cfg.ProcessRules, core.ProcessRule{
+				Process: r.Process, Path: r.Path, Target: target,
+			})
+		}
 		if p := a.activeSub(); p != nil {
 			cfg.SubscriptionURL = p.URL
 			cfg.SubscriptionFile = p.File
@@ -544,6 +598,13 @@ func (a *app) showToast(title, desc string) {
 
 // showSettings opens the settings window next to the tray icon.
 func (a *app) showSettings() {
+	a.show()
+}
+
+// showSettingsTab opens the settings window on a given tab (the menu's
+// 连接与规则 entry lands on the connections page).
+func (a *app) showSettingsTab(tab int) {
+	a.panel.tab = tab
 	a.show()
 }
 

@@ -394,6 +394,11 @@ func (a *app) setTUN(on bool) {
 	a.settings.tun = on
 	saveSettings(coreDir(), a.settings)
 	a.refreshTrayIcon()
+	if !on {
+		// Restore the user's DNS right away; a TUN that is still draining
+		// keeps hijacking its own queries through the interface.
+		go a.restoreTunDNS()
+	}
 	mgr := a.ctrl.Manager()
 	if on && a.ctrl.State().Running && !mgr.Privileged() {
 		// A core started without the setuid copy cannot open a utun; a live
@@ -419,6 +424,9 @@ func (a *app) setTUN(on bool) {
 					err = mgr.TUNErrorAfter(offset)
 				}
 				if err == nil {
+					if on {
+						a.applyTunDNS()
+					}
 					return
 				}
 				// Hot switch failed: fall back to a full restart; its
@@ -549,6 +557,9 @@ func (m *trayMenu) helpSubmenu(s core.State) *mygo.MenuItem {
 	m.apiIt = &mygo.MenuItem{Label: portLabel("API 端口", a.apiPort(), s.Running), Disabled: true}
 	m.ipIt = &mygo.MenuItem{Label: "IP: " + localIP(), Disabled: true}
 	return &mygo.MenuItem{Label: T("帮助"), Submenu: []*mygo.MenuItem{
+		{Label: T("连接与规则…"), Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.showSettingsTab(tabConnections)
+		}},
 		{Label: T("检查更新…"), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.checkForUpdates()
 		}},
@@ -715,6 +726,9 @@ func (a *app) mixedPort() int {
 }
 
 func (a *app) apiPort() int {
+	if a.activeAPI > 0 {
+		return a.activeAPI
+	}
 	return parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
 }
 

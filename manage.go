@@ -5,9 +5,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-
-	tokens "github.com/smallnest/uix/components/base"
-	"github.com/smallnest/uix/components/button"
 )
 
 // manageWindow is the ClashX-style 托管的配置文件 list: every managed
@@ -44,7 +41,7 @@ func (a *app) showManageWindow() {
 
 func (m *manageWindow) view(c *ui.Context) {
 	t := c.Theme()
-	c.SetTheme(tokens.For(t.Dark))
+	c.SetTheme(appleTheme(t.Dark))
 	profiles := m.app.settings.profiles
 	ui.Column(c).Fill().Padding(14).Gap(10).Children(func() {
 		ui.Text(c, "托管的配置文件：").FontSize(13).Bold()
@@ -73,9 +70,9 @@ func (m *manageWindow) view(c *ui.Context) {
 			}
 		}
 		ui.Row(c).Gap(8).Children(func() {
-			button.Button(c, button.Props{Label: T("添加"), Variant: button.Primary, OnClick: m.app.showSubscriptionDialog})
-			button.Button(c, button.Props{Label: T("更新"), Variant: button.Outline, OnClick: m.onUpdate})
-			button.Button(c, button.Props{Label: T("删除"), Variant: button.Destructive, OnClick: m.onDelete})
+			nativeButton(c, T("添加"), buttonPrimary, m.app.showSubscriptionDialog)
+			nativeButton(c, T("更新"), buttonSecondary, m.onUpdate)
+			nativeButton(c, T("删除"), buttonDestructive, m.onDelete)
 		})
 	})
 }

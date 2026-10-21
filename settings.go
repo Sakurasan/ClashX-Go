@@ -12,8 +12,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-
-	"github.com/smallnest/uix/components/button"
 )
 
 // toastMsg is a pending toast to show on the next frame.
@@ -39,6 +37,17 @@ type savedSelection struct {
 	Selected string `json:"selected"`
 }
 
+// appRoutingRule sends one application's traffic straight out (direct) or
+// through the proxy before the profile's domain rules. Process is the
+// executable name; Path is the .app bundle, used for a prefix regex that
+// also catches helper processes.
+type appRoutingRule struct {
+	Name    string `json:"name"`
+	Process string `json:"process"`
+	Path    string `json:"path,omitempty"`
+	Target  string `json:"target"` // "direct" or "proxy"
+}
+
 // defaultProxyBypass keeps local and Apple time-sync traffic off the proxy;
 // the user can edit the list in the settings pane and reset it here.
 const defaultProxyBypass = "127.*,192.168.*,10.*,localhost,*.local,timestamp.apple.com"
@@ -61,12 +70,14 @@ type settings struct {
 	allowLAN       bool
 	showTraffic    bool
 	tun            bool
+	tunDNS         string
 	ipv6           bool
 	benchmarkURL   string
 	proxyBypass    string
 	suspendSSIDs   string
 	noNotify       bool
 	autoCheckUpd   bool
+	appRules       []appRoutingRule
 	selections     []savedSelection
 	// shortcuts maps action id -> accelerator (e.g. "CmdOrCtrl+Shift+P").
 	shortcuts map[string]string
@@ -92,12 +103,14 @@ type settingsJSON struct {
 	AllowLAN       bool                  `json:"allowLAN"`
 	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
 	TUN            bool                  `json:"tun"`
+	TunDNS         string                `json:"tunDNS,omitempty"`
 	IPv6           bool                  `json:"ipv6,omitempty"`
 	BenchmarkURL   string                `json:"benchmarkURL,omitempty"`
 	ProxyBypass    string                `json:"proxyBypass,omitempty"`
 	SuspendSSIDs   string                `json:"suspendSSIDs,omitempty"`
 	NoNotify       bool                  `json:"noNotify,omitempty"`
 	AutoCheckUpd   *bool                 `json:"autoCheckUpdate,omitempty"`
+	AppRules       []appRoutingRule      `json:"appRules,omitempty"`
 	Selections     []savedSelection      `json:"selections,omitempty"`
 	Shortcuts      map[string]string     `json:"shortcuts,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
@@ -140,6 +153,7 @@ func loadSettings(dir string) *settings {
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
 	s.tun = w.TUN
+	s.tunDNS = strings.TrimSpace(w.TunDNS)
 	s.ipv6 = w.IPv6
 	if w.BenchmarkURL != "" {
 		s.benchmarkURL = w.BenchmarkURL
@@ -152,6 +166,12 @@ func loadSettings(dir string) *settings {
 	if w.AutoCheckUpd != nil {
 		s.autoCheckUpd = *w.AutoCheckUpd
 	}
+	for i := range w.AppRules {
+		if !strings.EqualFold(w.AppRules[i].Target, "proxy") {
+			w.AppRules[i].Target = "direct"
+		}
+	}
+	s.appRules = w.AppRules
 	s.selections = w.Selections
 	if w.Shortcuts != nil {
 		s.shortcuts = w.Shortcuts
@@ -209,12 +229,14 @@ func saveSettings(dir string, s *settings) {
 		SystemProxy:    s.systemProxy,
 		AllowLAN:       s.allowLAN,
 		TUN:            s.tun,
+		TunDNS:         s.tunDNS,
 		IPv6:           s.ipv6,
 		BenchmarkURL:   s.benchmarkURL,
 		ProxyBypass:    s.proxyBypass,
 		SuspendSSIDs:   s.suspendSSIDs,
 		NoNotify:       s.noNotify,
 		AutoCheckUpd:   &s.autoCheckUpd,
+		AppRules:       s.appRules,
 		Selections:     s.selections,
 		Shortcuts:      s.shortcuts,
 		ProxyBackup:    s.proxyBackup,
@@ -232,11 +254,11 @@ func saveSettings(dir string, s *settings) {
 func (p *panelApp) settingsPane(c *ui.Context) {
 	s := p.app.settings
 	t := c.Theme()
-	ui.Column(c).FillWidth().Gap(12).Children(func() {
+	ui.Column(c).FillWidth().Gap(14).Children(func() {
 		settingsGroup(c, "", func() {
-			ui.Checkbox(c, &s.startAtLogin, T("开机启动")).OnChange(func() {
+			settingsSwitch(c, T("开机启动"), &s.startAtLogin, func() {
 				if err := mygo.App.SetOpenAtLogin(s.startAtLogin); err != nil {
-					// Roll the check box back and surface the error.
+					// Roll the switch back and surface the error.
 					s.startAtLogin = !s.startAtLogin
 					msg := err.Error()
 					if strings.Contains(msg, "needs an app bundle") {
@@ -247,16 +269,15 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 				}
 				saveSettings(coreDir(), p.app.settings)
 			})
-			ui.Checkbox(c, &s.noNotify, T("减少通知")).OnChange(func() {
+			settingsSwitch(c, T("减少通知"), &s.noNotify, func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
-			ui.Checkbox(c, &s.autoCheckUpd, T("自动检查更新")).OnChange(func() {
+			settingsSwitch(c, T("自动检查更新"), &s.autoCheckUpd, func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
 		})
-		ui.Text(c, T("Clash 设置（保存并重启核心后生效）")).FontSize(11).TextColor(t.TextMuted)
-		settingsGroup(c, "", func() {
-			ui.Checkbox(c, &s.ipv6, T("启用 IPv6")).OnChange(func() {
+		settingsGroup(c, T("Clash 设置"), func() {
+			settingsSwitch(c, T("启用 IPv6"), &s.ipv6, func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
 			settingsRow(c, T("代理端口"), func() {
@@ -268,9 +289,10 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			settingsRow(c, T("Api 密钥"), func() {
 				ui.TextInput(c, &s.secret).Width(150).Placeholder(T("可选"))
 			})
-			ui.Checkbox(c, &s.allowLAN, T("允许局域网控制（不推荐）")).OnChange(func() {
+			settingsSwitch(c, T("允许局域网控制（不推荐）"), &s.allowLAN, func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
+			ui.Text(c, T("保存并重启核心后生效")).FontSize(11).TextColor(t.TextMuted)
 		})
 		settingsGroup(c, T("在特定 WiFi SSID 下自动暂停"), func() {
 			ui.Text(c, T("使用英文逗号 (,) 分隔")).FontSize(11).TextColor(t.TextMuted)
@@ -283,19 +305,18 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			ui.Text(c, T("使用英文逗号 (,) 分隔")).FontSize(11).TextColor(t.TextMuted)
 			ui.TextInput(c, &s.proxyBypass)
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-				ui.Text(c, T("重置")).OnClick(func() {
+				settingsAction(c, T("重置"), func() {
 					s.proxyBypass = defaultProxyBypass
 					saveSettings(coreDir(), p.app.settings)
 					p.app.win.Update(func() {})
 				})
 			})
 		})
-		ui.Text(c, T("配置文件")).FontSize(11).TextColor(t.TextMuted)
-		settingsGroup(c, "", func() {
+		settingsGroup(c, T("配置文件"), func() {
 			settingsRow(c, T("本地配置"), func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.TextInput(c, &s.configPath).Width(240).Placeholder("config.yaml")
-					ui.Text(c, T("浏览…")).OnClick(func() {
+					settingsAction(c, T("浏览…"), func() {
 						files, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 							Title:   T("选择 Clash 配置"),
 							Filters: []mygo.FileFilter{{Name: "YAML 配置", Extensions: []string{"yaml", "yml"}}},
@@ -307,14 +328,7 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 				})
 			})
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-				button.Button(c, button.Props{
-					Label:   T("保存并重启核心"),
-					Variant: button.Primary,
-					Size:    button.Sm,
-					OnClick: func() {
-						p.saveAndRestart()
-					},
-				})
+				nativeButton(c, T("保存并重启核心"), buttonPrimary, p.saveAndRestart)
 			})
 		})
 	})
@@ -327,6 +341,8 @@ func (p *panelApp) saveAndRestart() {
 		st.activeProfile = "" // a hand-set local path wins over a profile
 	}
 	saveSettings(coreDir(), st)
+	// The API port field may have changed; pick the run's TCP port from it.
+	p.app.chooseControllerPort()
 	p.app.menu.rebuild()
 	cfg := p.app.settingsConfig()
 	go func() {

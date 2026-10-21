@@ -6,8 +6,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	tokens "github.com/smallnest/uix/components/base"
-	"github.com/smallnest/uix/components/button"
 	"github.com/smallnest/uix/components/input"
 )
 
@@ -40,13 +38,13 @@ func (a *app) showSubscriptionDialog() {
 
 func (d *subscriptionDialog) view(c *ui.Context) {
 	t := c.Theme()
-	c.SetTheme(tokens.For(t.Dark))
+	c.SetTheme(appleTheme(t.Dark))
 	ui.Column(c).Fill().Padding(16).Gap(10).Children(func() {
 		ui.Text(c, T("Clash 订阅链接 — 下载后作为一个托管配置文件加入列表")).FontSize(12).TextColor(t.TextMuted)
 		input.Input(c, input.Props{Value: &d.url, Placeholder: "https://…/subscribe?token=…"}).FillWidth()
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
-			button.Button(c, button.Props{Label: T("取消"), Variant: button.Outline, OnClick: d.win.Hide})
-			button.Button(c, button.Props{Label: T("添加"), Variant: button.Primary, OnClick: d.save})
+			nativeButton(c, T("取消"), buttonSecondary, d.win.Hide)
+			nativeButton(c, T("添加"), buttonPrimary, d.save)
 		})
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,9 +17,11 @@ import (
 // at http://127.0.0.1:<port> and, when a secret is set, requires the
 // bearer token on every request.
 type Client struct {
-	Base   string // http://127.0.0.1:9090
+	Base   string // http://127.0.0.1:9090 or http://unix
 	Secret string
 	HTTP   *http.Client
+	// Socket is the Unix socket when the client talks over one.
+	Socket string
 }
 
 // NewClient returns a controller client for the given endpoint and secret.
@@ -27,6 +30,24 @@ func NewClient(controllerPort int, secret string) *Client {
 		Base:   fmt.Sprintf("http://127.0.0.1:%d", controllerPort),
 		Secret: secret,
 		HTTP:   &http.Client{Timeout: 5 * time.Second},
+	}
+}
+
+// NewUnixClient talks to the controller over mihomo's Unix socket. The
+// socket stays available while a previous core finishes shutting down, so
+// restarts need not wait for the TCP controller port to be released.
+func NewUnixClient(socket, secret string) *Client {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socket)
+		},
+	}
+	return &Client{
+		Base:   "http://unix",
+		Secret: secret,
+		HTTP:   &http.Client{Transport: transport, Timeout: 5 * time.Second},
+		Socket: socket,
 	}
 }
 
@@ -288,7 +309,12 @@ var reloadHTTP = &http.Client{Timeout: 2 * time.Minute}
 // (PUT /configs {"path"}), the zero-downtime reload path.
 func (c *Client) Reload(ctx context.Context, path string) error {
 	body := strings.NewReader(fmt.Sprintf(`{"path":%q}`, path))
-	resp, err := c.doWith(ctx, reloadHTTP, http.MethodPut, "/configs", body)
+	hc := reloadHTTP
+	if c.Socket != "" {
+		// Keep the Unix transport but allow the long provider-init wait.
+		hc = &http.Client{Transport: c.HTTP.Transport, Timeout: 2 * time.Minute}
+	}
+	resp, err := c.doWith(ctx, hc, http.MethodPut, "/configs", body)
 	if err != nil {
 		return err
 	}
@@ -413,4 +439,82 @@ func (c *Client) CloseConnections(ctx context.Context) error {
 		return fmt.Errorf("DELETE /connections: HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ConnectionMetadata describes the endpoints of an active connection.
+type ConnectionMetadata struct {
+	Network         string `json:"network"`
+	Type            string `json:"type"`
+	SourceIP        string `json:"sourceIP"`
+	DestinationIP   string `json:"destinationIP"`
+	SourcePort      string `json:"sourcePort"`
+	DestinationPort string `json:"destinationPort"`
+	Host            string `json:"host"`
+	Process         string `json:"process"`
+	ProcessPath     string `json:"processPath"`
+	SniffHost       string `json:"sniffHost"`
+	DNSMode         string `json:"dnsMode"`
+}
+
+// Connection is one active connection from /connections.
+type Connection struct {
+	ID          string             `json:"id"`
+	Metadata    ConnectionMetadata `json:"metadata"`
+	Upload      int64              `json:"upload"`
+	Download    int64              `json:"download"`
+	Start       time.Time          `json:"start"`
+	Chains      []string           `json:"chains"`
+	Rule        string             `json:"rule"`
+	RulePayload string             `json:"rulePayload"`
+}
+
+// Connections is the /connections snapshot: the live list plus the totals
+// since the core started.
+type Connections struct {
+	DownloadTotal int64        `json:"downloadTotal"`
+	UploadTotal   int64        `json:"uploadTotal"`
+	Connections   []Connection `json:"connections"`
+}
+
+// GetConnections reads the live connection table.
+func (c *Client) GetConnections(ctx context.Context) (*Connections, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/connections", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /connections: HTTP %d", resp.StatusCode)
+	}
+	var conns Connections
+	if err := json.NewDecoder(resp.Body).Decode(&conns); err != nil {
+		return nil, err
+	}
+	return &conns, nil
+}
+
+// Rule is one entry of the running rule list, in matching order.
+type Rule struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+	Proxy   string `json:"proxy"`
+}
+
+// GetRules reads the rules the core loaded, in the order it matches them.
+func (c *Client) GetRules(ctx context.Context) ([]Rule, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/rules", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /rules: HTTP %d", resp.StatusCode)
+	}
+	var v struct {
+		Rules []Rule `json:"rules"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, err
+	}
+	return v.Rules, nil
 }

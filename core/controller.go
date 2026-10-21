@@ -65,10 +65,14 @@ type Controller struct {
 
 // NewController builds a controller from a manager and a config.
 func NewController(mgr *Manager, cfg Config) *Controller {
+	client := NewClient(cfg.ControllerPort, cfg.Secret)
+	if cfg.ControllerSocket != "" {
+		client = NewUnixClient(cfg.ControllerSocket, cfg.Secret)
+	}
 	c := &Controller{
 		mgr:    mgr,
 		cfg:    cfg,
-		client: NewClient(cfg.ControllerPort, cfg.Secret),
+		client: client,
 		// Initialised up front: SelectProxy's delay probe may run before
 		// the first group test (e.g. remembered selections replayed at
 		// startup) and must not assign into a nil map.

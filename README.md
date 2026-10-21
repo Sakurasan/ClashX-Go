@@ -32,6 +32,12 @@ needs no runtime download.
   configuration snapshotted and restored on disable/quit
 - TUN mode: a one-time administrator authorization installs a setuid copy of
   the core, after which toggling TUN is a passwordless hot API call
+- Tun DNS: optionally point system DNS at a chosen address while TUN is on
+  (originals restored when TUN turns off or the app quits); empty uses local
+  DNS
+- Per-app routing: pick `.app` bundles in the 分流 tab to force them direct or
+  through the proxy before domain rules (PROCESS-NAME plus a bundle-path
+  regex, so helper processes match too); works with TUN and system proxy
 - Automatic pause on selected Wi-Fi SSIDs, auto-restart of a stopped core,
   and automatic controller-port shifting when the configured port is busy
 
@@ -46,12 +52,23 @@ needs no runtime download.
 
 **Preferences (ClashX semantics)**
 
-- Four tabs: 通用 / 全局快捷键 / 调试 / Meta
+- Six tabs: 通用 / 连接 / 分流 / 全局快捷键 / 调试 / Meta
 - General: launch at login, notifications, IPv6, ports, API secret,
   allow-LAN, latency-test URL, Wi-Fi suspend list, proxy bypass list
 - Global hotkeys for proxy/TUN, mode switching, copy command, open menu/log/
   dashboard (accelerated via MyGo's global shortcut module)
 - Built-in dashboard: mihomo's `external-ui` serves zashboard at `/ui`
+
+**Diagnostics and notices**
+
+- **连接** tab: live connections with the matched rule, proxy chain and
+  traffic, search, close-all and a per-connection detail dialog, plus the
+  loaded rules in matching order
+- Redacted diagnostics bundle (versions, ports, system proxy, listeners and
+  log tails) from 调试 → 导出诊断包
+- A daily notice when the subscription quota drops below 5% or expires
+  within 72 hours (silenced by 减少通知)
+- An update check shortly after launch; the notice opens the installer
 
 ## Requirements
 
@@ -76,6 +93,7 @@ Fetch the mihomo core for both architectures first, then build the app:
 
 ```sh
 scripts/fetch-cores.sh                  # mihomo v1.19.32 for arm64 + amd64
+scripts/build-dnshelper.sh              # universal Tun DNS helper
 go tool mygo build                      # -> build/darwin-<arch>/ClashX go.app + .dmg
 go tool mygo build -platform darwin/universal   # universal app + universal core
 ```

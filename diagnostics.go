@@ -63,6 +63,12 @@ func diagSummary(a *app) string {
 	fmt.Fprintf(&b, "running: %t, mode: %s, groups: %d\n", st.Running, st.Mode, len(st.Groups))
 	fmt.Fprintf(&b, "tun: %t, systemProxy: %t, allowLAN: %t, ipv6: %t\n",
 		s.tun, s.systemProxy, s.allowLAN, s.ipv6)
+	tunDNS := s.tunDNS
+	if tunDNS == "" {
+		tunDNS = "local"
+	}
+	fmt.Fprintf(&b, "tun DNS: %s (hijacked: %t)\n", tunDNS, dnsBackupExists())
+	fmt.Fprintf(&b, "app routing rules: %d\n", len(s.appRules))
 	fmt.Fprintf(&b, "ports: mixed %d, controller %d\n", a.mixedPort(), a.apiPort())
 	fmt.Fprintf(&b, "secret: %s\n", map[bool]string{true: "set", false: "empty"}[s.secret != ""])
 	fmt.Fprintf(&b, "profile: %q, config: %q, autoUpdate: %t\n", s.activeProfile, s.configPath, s.autoUpdate)

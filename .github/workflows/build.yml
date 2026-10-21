@@ -27,6 +27,9 @@ jobs:
       - name: Fetch dashboard
         run: scripts/fetch-dashboard.sh
 
+      - name: Build Tun DNS helper
+        run: scripts/build-dnshelper.sh
+
       - name: Vet and test
         run: |
           go vet ./...

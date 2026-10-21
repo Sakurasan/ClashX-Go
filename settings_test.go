@@ -22,6 +22,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 	s.activeProfile = "example"
 	s.configPath = "/tmp/my.yaml"
 	s.startAtLogin = true
+	s.tunDNS = "8.8.8.8"
+	s.appRules = []appRoutingRule{{Name: "Telegram", Process: "Telegram", Path: "/Applications/Telegram.app", Target: "proxy"}}
 	saveSettings(dir, s)
 
 	got := loadSettings(dir)
@@ -42,6 +44,13 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if !got.startAtLogin {
 		t.Errorf("startAtLogin = false, want true")
+	}
+	if got.tunDNS != "8.8.8.8" {
+		t.Errorf("tunDNS = %q, want 8.8.8.8", got.tunDNS)
+	}
+	if len(got.appRules) != 1 || got.appRules[0].Process != "Telegram" ||
+		got.appRules[0].Path != "/Applications/Telegram.app" || got.appRules[0].Target != "proxy" {
+		t.Errorf("appRules = %+v, want the persisted Telegram rule", got.appRules)
 	}
 	// The on-disk file must contain the subscription URL in plain JSON.
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
