@@ -57,7 +57,20 @@ type groupEntry struct {
 	current string
 }
 
-var modeNames = map[string]string{"rule": T("规则"), "global": T("全局"), "direct": T("直连")}
+// modeName localises a mode when it is drawn. A package-level map would
+// freeze the language at init, before tests (or the system language
+// changing) can pick another one.
+func modeName(mode string) string {
+	switch mode {
+	case "rule":
+		return T("规则")
+	case "global":
+		return T("全局")
+	case "direct":
+		return T("直连")
+	}
+	return mode
+}
 
 // build constructs the whole menu from the current state and settings.
 func (m *trayMenu) build(s core.State) {
@@ -70,7 +83,7 @@ func (m *trayMenu) build(s core.State) {
 	modeAccel := map[string]string{"rule": "Alt+R", "global": "Alt+G", "direct": "Alt+D"}
 	for _, mode := range []string{"rule", "global", "direct"} {
 		it := &mygo.MenuItem{
-			Label:       modeNames[mode],
+			Label:       modeName(mode),
 			Type:        mygo.MenuItemRadio,
 			Checked:     s.Mode == mode,
 			Accelerator: modeAccel[mode],
@@ -81,7 +94,7 @@ func (m *trayMenu) build(s core.State) {
 		modeSub = append(modeSub, it)
 	}
 	m.mode = s.Mode
-	m.modeItem = &mygo.MenuItem{Label: T("出站模式") + " (" + modeNames[s.Mode] + ")", Submenu: modeSub}
+	m.modeItem = &mygo.MenuItem{Label: T("出站模式") + " (" + modeName(s.Mode) + ")", Submenu: modeSub}
 
 	items := []*mygo.MenuItem{m.modeItem, mygo.Separator()}
 	for _, g := range s.Groups {
@@ -190,7 +203,7 @@ func (m *trayMenu) refresh(s core.State) {
 	}
 	if s.Mode != m.mode {
 		m.mode = s.Mode
-		m.modeItem.SetLabel(T("出站模式") + " (" + modeNames[s.Mode] + ")")
+		m.modeItem.SetLabel(T("出站模式") + " (" + modeName(s.Mode) + ")")
 		for mode, it := range m.modeRadio {
 			it.SetChecked(mode == s.Mode)
 		}
