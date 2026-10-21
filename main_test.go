@@ -1,8 +1,12 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"image/png"
+	"io"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -44,7 +48,7 @@ func TestPanelSettings(t *testing.T) {
 	if !tt.HasText("保存并重启核心") {
 		t.Errorf("save button missing, texts %q", tt.Texts())
 	}
-	for _, want := range []string{"启用 IPv6", "允许局域网控制（不推荐）", "代理延迟测试地址", "在特定 WiFi SSID 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "重置"} {
+	for _, want := range []string{"启用 IPv6", "允许局域网控制（不推荐）", "代理延迟测试地址", "在特定 WiFi SSID 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "自动检查更新", "重置"} {
 		if !tt.HasText(want) {
 			t.Errorf("meta general setting %q missing, texts %q", want, tt.Texts())
 		}
@@ -163,5 +167,48 @@ func TestTraySpeedIconDimState(t *testing.T) {
 	}
 	if got := maxAlpha(false); got != 110 {
 		t.Errorf("inactive paw alpha = %d, want 110", got)
+	}
+}
+
+// The diagnostics bundle must carry the summary without leaking the API
+// secret or subscription tokens.
+func TestDiagnosticsRedaction(t *testing.T) {
+	a := testApp(t)
+	a.settings.secret = "topsecret123"
+	a.settings.profiles = []subscriptionProfile{{
+		Name: "test", URL: "https://example.com/sub?token=abc123",
+	}}
+	out := filepath.Join(t.TempDir(), "diag.zip")
+	if err := writeDiagnostics(out, t.TempDir(), a); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.OpenReader(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	var summary string
+	for _, f := range zr.File {
+		if f.Name == "summary.txt" {
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := io.ReadAll(rc)
+			rc.Close()
+			summary = string(data)
+		}
+	}
+	if summary == "" {
+		t.Fatal("summary.txt missing")
+	}
+	if strings.Contains(summary, "topsecret123") {
+		t.Error("summary leaks the API secret")
+	}
+	if strings.Contains(summary, "token=abc123") {
+		t.Error("summary leaks the subscription token")
+	}
+	if !strings.Contains(summary, "https://example.com/…") {
+		t.Errorf("summary missing masked subscription URL: %s", summary)
 	}
 }

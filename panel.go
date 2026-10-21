@@ -117,6 +117,7 @@ func (p *panelApp) debugPane(c *ui.Context) {
 				ui.Button(c, "打开配置目录").OnClick(func() {
 					_ = mygo.Shell.OpenPath(coreDir())
 				})
+				ui.Button(c, "导出诊断包").OnClick(a.exportDiagnostics)
 			})
 		})
 		settingsGroup(c, "系统代理", func() {

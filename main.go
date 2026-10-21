@@ -126,6 +126,11 @@ func (a *app) ready() {
 			a.win.Hide()
 		}
 	})
+	mygo.App.OnNotificationClick(func(id string) {
+		if id == notificationUpdateID {
+			a.checkForUpdates()
+		}
+	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		// Never leave the system pointing at a port that is about to close;
 		// restore the user's own proxy config, not just "off". Log each step
@@ -150,6 +155,8 @@ func (a *app) ready() {
 	// Boot the core in the background on launch.
 	go a.startCore()
 	go a.autoUpdateLoop(context.Background())
+	go a.autoUpdateCheckLoop()
+	go a.subscriptionNoticeLoop()
 	go a.watchConfigSource()
 	go a.ssidSuspendLoop()
 }

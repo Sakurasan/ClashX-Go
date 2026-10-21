@@ -552,6 +552,9 @@ func (m *trayMenu) helpSubmenu(s core.State) *mygo.MenuItem {
 		{Label: "检查更新…", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.checkForUpdates()
 		}},
+		{Label: "导出诊断…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.exportDiagnostics()
+		}},
 		{Label: "关于…", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.showAbout()
 		}},

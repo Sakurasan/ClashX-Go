@@ -66,6 +66,7 @@ type settings struct {
 	proxyBypass    string
 	suspendSSIDs   string
 	noNotify       bool
+	autoCheckUpd   bool
 	selections     []savedSelection
 	// shortcuts maps action id -> accelerator (e.g. "CmdOrCtrl+Shift+P").
 	shortcuts map[string]string
@@ -96,6 +97,7 @@ type settingsJSON struct {
 	ProxyBypass    string                `json:"proxyBypass,omitempty"`
 	SuspendSSIDs   string                `json:"suspendSSIDs,omitempty"`
 	NoNotify       bool                  `json:"noNotify,omitempty"`
+	AutoCheckUpd   *bool                 `json:"autoCheckUpdate,omitempty"`
 	Selections     []savedSelection      `json:"selections,omitempty"`
 	Shortcuts      map[string]string     `json:"shortcuts,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
@@ -114,6 +116,7 @@ func loadSettings(dir string) *settings {
 		benchmarkURL:   defaultBenchmarkURL,
 		proxyBypass:    defaultProxyBypass,
 		shortcuts:      map[string]string{},
+		autoCheckUpd:   true,
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
 	if err != nil {
@@ -146,6 +149,9 @@ func loadSettings(dir string) *settings {
 	}
 	s.suspendSSIDs = w.SuspendSSIDs
 	s.noNotify = w.NoNotify
+	if w.AutoCheckUpd != nil {
+		s.autoCheckUpd = *w.AutoCheckUpd
+	}
 	s.selections = w.Selections
 	if w.Shortcuts != nil {
 		s.shortcuts = w.Shortcuts
@@ -208,6 +214,7 @@ func saveSettings(dir string, s *settings) {
 		ProxyBypass:    s.proxyBypass,
 		SuspendSSIDs:   s.suspendSSIDs,
 		NoNotify:       s.noNotify,
+		AutoCheckUpd:   &s.autoCheckUpd,
 		Selections:     s.selections,
 		Shortcuts:      s.shortcuts,
 		ProxyBackup:    s.proxyBackup,
@@ -241,6 +248,9 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 				saveSettings(coreDir(), p.app.settings)
 			})
 			ui.Checkbox(c, &s.noNotify, "减少通知").OnChange(func() {
+				saveSettings(coreDir(), p.app.settings)
+			})
+			ui.Checkbox(c, &s.autoCheckUpd, "自动检查更新").OnChange(func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
 		})

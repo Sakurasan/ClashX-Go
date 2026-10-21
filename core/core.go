@@ -367,6 +367,9 @@ const privilegedDir = "/Library/Application Support/clashx-go"
 
 func privilegedCorePath() string { return filepath.Join(privilegedDir, binaryName()) }
 
+// PrivilegedCorePath is where the one-time installed setuid core lives.
+func PrivilegedCorePath() string { return privilegedCorePath() }
+
 // privilegedCore installs or refreshes the setuid copy of the core used for
 // TUN. The administrator prompt appears only the first time, or after the
 // bundled core changed (hash mismatch / missing setuid bit).

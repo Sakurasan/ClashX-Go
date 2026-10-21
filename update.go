@@ -64,3 +64,26 @@ func (a *app) checkForUpdates() {
 		mygo.App.Relaunch()
 	}()
 }
+
+const notificationUpdateID = "clashx-go-update"
+
+// autoUpdateCheckLoop checks the signed feed once after launch when the user
+// enabled automatic checks, and posts a notification instead of a modal.
+func (a *app) autoUpdateCheckLoop() {
+	time.Sleep(20 * time.Second)
+	if a.quitting || a.settings == nil || !a.settings.autoCheckUpd || !mygo.Updater.Enabled() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	up, err := mygo.Updater.Check(ctx)
+	cancel()
+	if err != nil || up == nil {
+		return
+	}
+	n := mygo.NewNotification(mygo.NotificationOptions{
+		ID:    notificationUpdateID,
+		Title: "ClashX go 有新版本",
+		Body:  up.Version + " 可用，点击检查更新",
+	})
+	_ = n.Show()
+}
