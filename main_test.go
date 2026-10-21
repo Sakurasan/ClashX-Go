@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"image/png"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -210,5 +211,26 @@ func TestDiagnosticsRedaction(t *testing.T) {
 	}
 	if !strings.Contains(summary, "https://example.com/…") {
 		t.Errorf("summary missing masked subscription URL: %s", summary)
+	}
+}
+
+func TestMain(m *testing.M) {
+	// Tests assert the Chinese UI; CI runners default to English.
+	os.Setenv("CLASHX_GO_LANG", "zh")
+	uiLang = "zh"
+	os.Exit(m.Run())
+}
+
+func TestPanelSettingsEnglish(t *testing.T) {
+	old := uiLang
+	uiLang = "en"
+	defer func() { uiLang = old }()
+	a := testApp(t)
+	p := &panelApp{app: a}
+	tt := ui.NewTester(p.view, 520, 720)
+	for _, want := range []string{"Proxy Port", "Save & Restart Core", "Enable IPv6", "Check for Updates Automatically"} {
+		if !tt.HasText(want) {
+			t.Errorf("english UI missing %q, texts %q", want, tt.Texts())
+		}
 	}
 }

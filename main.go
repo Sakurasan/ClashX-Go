@@ -114,7 +114,7 @@ func (a *app) ready() {
 	}
 	a.panel = &panelApp{app: a}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title:   "ClashX 设置",
+		Title:   T("ClashX 设置"),
 		Width:   520,
 		Height:  720,
 		Hidden:  true,

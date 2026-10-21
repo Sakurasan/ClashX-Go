@@ -57,7 +57,7 @@ type groupEntry struct {
 	current string
 }
 
-var modeNames = map[string]string{"rule": "规则", "global": "全局", "direct": "直连"}
+var modeNames = map[string]string{"rule": T("规则"), "global": T("全局"), "direct": T("直连")}
 
 // build constructs the whole menu from the current state and settings.
 func (m *trayMenu) build(s core.State) {
@@ -81,7 +81,7 @@ func (m *trayMenu) build(s core.State) {
 		modeSub = append(modeSub, it)
 	}
 	m.mode = s.Mode
-	m.modeItem = &mygo.MenuItem{Label: "出站模式 (" + modeNames[s.Mode] + ")", Submenu: modeSub}
+	m.modeItem = &mygo.MenuItem{Label: T("出站模式") + " (" + modeNames[s.Mode] + ")", Submenu: modeSub}
 
 	items := []*mygo.MenuItem{m.modeItem, mygo.Separator()}
 	for _, g := range s.Groups {
@@ -90,31 +90,31 @@ func (m *trayMenu) build(s core.State) {
 	items = append(items, mygo.Separator())
 
 	m.sysProxy = &mygo.MenuItem{
-		Label:       "设置为系统代理",
+		Label:       T("设置为系统代理"),
 		Type:        mygo.MenuItemCheckbox,
 		Checked:     st.systemProxy,
 		Accelerator: "Cmd+S",
 	}
 	m.sysProxy.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setSystemProxyToggle(it) }
 	m.tunItem = &mygo.MenuItem{
-		Label:       "Tun 模式",
+		Label:       T("Tun 模式"),
 		Type:        mygo.MenuItemCheckbox,
 		Checked:     st.tun,
 		Accelerator: "Cmd+E",
 		ToolTip:     "首次开启需授权安装提权组件，之后免密",
 	}
 	m.tunItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setTUNToggle(it) }
-	copyCmd := &mygo.MenuItem{Label: "复制终端代理命令", Accelerator: "Cmd+C", Click: func(*mygo.MenuItem, *mygo.Window) { a.copyProxyCommand() }}
+	copyCmd := &mygo.MenuItem{Label: T("复制终端代理命令"), Accelerator: "Cmd+C", Click: func(*mygo.MenuItem, *mygo.Window) { a.copyProxyCommand() }}
 	items = append(items, m.sysProxy, m.tunItem, copyCmd, mygo.Separator())
 
 	m.loginItem = &mygo.MenuItem{
-		Label:   "开机启动",
+		Label:   T("开机启动"),
 		Type:    mygo.MenuItemCheckbox,
 		Checked: st.startAtLogin,
 	}
 	m.loginItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setLoginToggle(it) }
 	m.speedItem = &mygo.MenuItem{
-		Label:   "显示实时速率",
+		Label:   T("显示实时速率"),
 		Type:    mygo.MenuItemCheckbox,
 		Checked: st.showTraffic,
 	}
@@ -124,25 +124,25 @@ func (m *trayMenu) build(s core.State) {
 		m.setSpeedTitle(a.ctrl.State())
 	}
 	m.lanItem = &mygo.MenuItem{
-		Label:   "允许局域网连接",
+		Label:   T("允许局域网连接"),
 		Type:    mygo.MenuItemCheckbox,
 		Checked: st.allowLAN,
 	}
 	m.lanItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setLANToggle(it) }
 	items = append(items, m.loginItem, m.speedItem, m.lanItem, mygo.Separator())
 
-	testAll := &mygo.MenuItem{Label: "延迟测速", Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups(); a.reopenMenu() }}
-	console := &mygo.MenuItem{Label: "控制台", Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.openConsole() }}
+	testAll := &mygo.MenuItem{Label: T("延迟测速"), Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups(); a.reopenMenu() }}
+	console := &mygo.MenuItem{Label: T("控制台"), Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.openConsole() }}
 	items = append(items, testAll, console, mygo.Separator())
 
 	m.subInfoIt = &mygo.MenuItem{Label: subInfoLabel(s), Disabled: true}
-	config := &mygo.MenuItem{Label: "配置", Submenu: m.configSubmenu()}
-	more := &mygo.MenuItem{Label: "更多设置", Submenu: []*mygo.MenuItem{
-		{Label: "偏好设置…", Accelerator: "Cmd+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.showSettings() }},
+	config := &mygo.MenuItem{Label: T("配置"), Submenu: m.configSubmenu()}
+	more := &mygo.MenuItem{Label: T("更多设置"), Submenu: []*mygo.MenuItem{
+		{Label: T("偏好设置…"), Accelerator: "Cmd+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.showSettings() }},
 	}}
 	meta := &mygo.MenuItem{Label: "Meta", Submenu: []*mygo.MenuItem{
-		{Label: "重载核心配置", Click: func(*mygo.MenuItem, *mygo.Window) { a.reloadCore() }},
-		{Label: "关闭所有连接", Click: func(*mygo.MenuItem, *mygo.Window) { go a.closeConnections() }},
+		{Label: T("重载核心配置"), Click: func(*mygo.MenuItem, *mygo.Window) { a.reloadCore() }},
+		{Label: T("关闭所有连接"), Click: func(*mygo.MenuItem, *mygo.Window) { go a.closeConnections() }},
 	}}
 	items = append(items, config, more, meta, m.helpSubmenu(s), mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit})
 
@@ -158,7 +158,7 @@ func (m *trayMenu) groupItem(g *core.GroupView) *mygo.MenuItem {
 	ge := &groupEntry{name: g.Name, members: map[string]*mygo.MenuItem{}, labels: map[string]string{}, current: g.Current}
 	group := g.Name
 	sub := []*mygo.MenuItem{
-		{Label: "延迟测速", Click: func(*mygo.MenuItem, *mygo.Window) { go m.app.testGroup(group); m.app.reopenMenu() }},
+		{Label: T("延迟测速"), Click: func(*mygo.MenuItem, *mygo.Window) { go m.app.testGroup(group); m.app.reopenMenu() }},
 		mygo.Separator(),
 	}
 	for _, name := range g.Members {
@@ -190,7 +190,7 @@ func (m *trayMenu) refresh(s core.State) {
 	}
 	if s.Mode != m.mode {
 		m.mode = s.Mode
-		m.modeItem.SetLabel("出站模式 (" + modeNames[s.Mode] + ")")
+		m.modeItem.SetLabel(T("出站模式") + " (" + modeNames[s.Mode] + ")")
 		for mode, it := range m.modeRadio {
 			it.SetChecked(mode == s.Mode)
 		}
@@ -281,7 +281,7 @@ func (a *app) setMode(mode string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.ctrl.SetMode(ctx, mode); err != nil {
-		a.reportError("切换模式失败", err.Error())
+		a.reportError(T("切换模式失败"), err.Error())
 	}
 }
 
@@ -350,7 +350,7 @@ func (a *app) setLoginToggle(it *mygo.MenuItem) {
 	on := it.IsChecked()
 	if err := mygo.App.SetOpenAtLogin(on); err != nil {
 		it.SetChecked(!on)
-		a.reportError("开机启动", "无法修改登录项："+err.Error())
+		a.reportError(T("开机启动"), "无法修改登录项："+err.Error())
 		return
 	}
 	a.settings.startAtLogin = mygo.App.OpenAtLogin()
@@ -443,7 +443,7 @@ func (a *app) copyProxyCommand() {
 	port := a.mixedPort()
 	cmd := fmt.Sprintf("export https_proxy=http://127.0.0.1:%d http_proxy=http://127.0.0.1:%d all_proxy=socks5://127.0.0.1:%d", port, port, port)
 	if err := mygo.Clipboard.Write(transfer.TextData(cmd)); err != nil {
-		a.reportError("复制失败", err.Error())
+		a.reportError(T("复制失败"), err.Error())
 	}
 }
 
@@ -451,7 +451,7 @@ func (a *app) testGroup(group string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := a.ctrl.TestGroup(ctx, group); err != nil {
-		a.reportError("延迟测速", fmt.Sprintf("%s: %v", group, err))
+		a.reportError(T("延迟测速"), fmt.Sprintf("%s: %v", group, err))
 	}
 }
 
@@ -470,7 +470,7 @@ func (a *app) selectProxy(group, member string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.ctrl.SelectProxy(ctx, group, member); err != nil {
-		a.reportError("切换节点失败", err.Error())
+		a.reportError(T("切换节点失败"), err.Error())
 		return
 	}
 	a.recordSelection(group, member)
@@ -479,7 +479,7 @@ func (a *app) selectProxy(group, member string) {
 func (a *app) updateSubscription() {
 	p := a.activeSub()
 	if p == nil {
-		a.reportError("更新订阅", "当前没有选中的托管订阅。")
+		a.reportError(T("更新订阅"), "当前没有选中的托管订阅。")
 		a.showSubscriptionDialog()
 		return
 	}
@@ -490,13 +490,13 @@ func (a *app) updateSubscription() {
 			return
 		}
 		a.menu.rebuild()
-		a.showToast("订阅已更新", fmt.Sprintf("%s：%d 个节点已重载。", p.Name, n))
+		a.showToast(T("订阅已更新"), fmt.Sprintf("%s：%d 个节点已重载。", p.Name, n))
 	}()
 }
 
 func (a *app) chooseLocalConfig() {
 	files, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:   "选择本地 Clash 配置",
+		Title:   T("选择本地 Clash 配置"),
 		Filters: []mygo.FileFilter{{Name: "YAML 配置", Extensions: []string{"yaml", "yml"}}},
 	})
 	if err != nil || len(files) == 0 {
@@ -548,19 +548,19 @@ func (m *trayMenu) helpSubmenu(s core.State) *mygo.MenuItem {
 	m.httpIt = &mygo.MenuItem{Label: portLabel("HTTP/SOCKS 端口", a.mixedPort(), s.Running), Disabled: true}
 	m.apiIt = &mygo.MenuItem{Label: portLabel("API 端口", a.apiPort(), s.Running), Disabled: true}
 	m.ipIt = &mygo.MenuItem{Label: "IP: " + localIP(), Disabled: true}
-	return &mygo.MenuItem{Label: "帮助", Submenu: []*mygo.MenuItem{
-		{Label: "检查更新…", Click: func(*mygo.MenuItem, *mygo.Window) {
+	return &mygo.MenuItem{Label: T("帮助"), Submenu: []*mygo.MenuItem{
+		{Label: T("检查更新…"), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.checkForUpdates()
 		}},
-		{Label: "导出诊断…", Click: func(*mygo.MenuItem, *mygo.Window) {
+		{Label: T("导出诊断…"), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.exportDiagnostics()
 		}},
-		{Label: "关于…", Click: func(*mygo.MenuItem, *mygo.Window) {
+		{Label: T("关于…"), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.showAbout()
 		}},
 		mygo.Separator(),
-		{Label: "日志等级", Submenu: levelSub},
-		{Label: "打开日志文件", Accelerator: "Cmd+L", Click: func(*mygo.MenuItem, *mygo.Window) {
+		{Label: T("日志等级"), Submenu: levelSub},
+		{Label: T("打开日志文件"), Accelerator: "Cmd+L", Click: func(*mygo.MenuItem, *mygo.Window) {
 			_ = mygo.Shell.OpenPath(a.ctrl.Manager().LogPath())
 		}},
 		mygo.Separator(),
@@ -591,9 +591,9 @@ func (m *trayMenu) configSubmenu() []*mygo.MenuItem {
 		it.Click = func(*mygo.MenuItem, *mygo.Window) { a.selectProfile(p.Name) }
 		items = append(items, it)
 	}
-	localLabel := "本地配置…"
+	localLabel := T("本地配置…")
 	if st.configPath != "" {
-		localLabel = "本地配置: " + filepath.Base(st.configPath)
+		localLabel = T("本地配置: ") + filepath.Base(st.configPath)
 	}
 	local := &mygo.MenuItem{
 		Label:   localLabel,
@@ -608,18 +608,18 @@ func (m *trayMenu) configSubmenu() []*mygo.MenuItem {
 		}
 	}
 	items = append(items, local, mygo.Separator(),
-		&mygo.MenuItem{Label: "打开配置文件夹", Accelerator: "Cmd+O",
+		&mygo.MenuItem{Label: T("打开配置文件夹"), Accelerator: "Cmd+O",
 			Click: func(*mygo.MenuItem, *mygo.Window) { _ = mygo.Shell.OpenPath(coreDir()) }},
-		&mygo.MenuItem{Label: "重载配置文件", Accelerator: "Cmd+R",
+		&mygo.MenuItem{Label: T("重载配置文件"), Accelerator: "Cmd+R",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.reloadCore() }},
-		&mygo.MenuItem{Label: "更新外部资源", Accelerator: "Shift+Cmd+U",
+		&mygo.MenuItem{Label: T("更新外部资源"), Accelerator: "Shift+Cmd+U",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
 	)
-	managed := &mygo.MenuItem{Label: "托管配置", Submenu: []*mygo.MenuItem{
-		{Label: "管理", Accelerator: "Cmd+M", Click: func(*mygo.MenuItem, *mygo.Window) { a.showManageWindow() }},
-		{Label: "更新", Accelerator: "Cmd+U", Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
+	managed := &mygo.MenuItem{Label: T("托管配置"), Submenu: []*mygo.MenuItem{
+		{Label: T("管理"), Accelerator: "Cmd+M", Click: func(*mygo.MenuItem, *mygo.Window) { a.showManageWindow() }},
+		{Label: T("更新"), Accelerator: "Cmd+U", Click: func(*mygo.MenuItem, *mygo.Window) { a.updateSubscription() }},
 		m.autoUpdateItem(),
-		{Label: "设置更新间隔", Submenu: intervalItems(a)},
+		{Label: T("设置更新间隔"), Submenu: intervalItems(a)},
 	}}
 	return append(items, managed)
 }
@@ -627,7 +627,7 @@ func (m *trayMenu) configSubmenu() []*mygo.MenuItem {
 // autoUpdateItem builds the 自动更新 checkbox bound to settings.
 func (m *trayMenu) autoUpdateItem() *mygo.MenuItem {
 	it := &mygo.MenuItem{
-		Label:   "自动更新",
+		Label:   T("自动更新"),
 		Type:    mygo.MenuItemCheckbox,
 		Checked: m.app.settings.autoUpdate,
 	}
@@ -642,7 +642,7 @@ var updateIntervals = []struct {
 	label string
 	min   int
 }{
-	{"30 分钟", 30}, {"1 小时", 60}, {"6 小时", 360}, {"12 小时", 720}, {"24 小时", 1440},
+	{T("30 分钟"), 30}, {T("1 小时"), 60}, {T("6 小时"), 360}, {T("12 小时"), 720}, {T("24 小时"), 1440},
 }
 
 func intervalItems(a *app) []*mygo.MenuItem {
@@ -694,11 +694,11 @@ func (a *app) openConsole() {
 		}
 	}
 	if !installed {
-		a.reportError("控制台", "仪表盘未安装：请运行 scripts/fetch-dashboard.sh 或把 ui/ 放入配置目录。")
+		a.reportError(T("控制台"), "仪表盘未安装：请运行 scripts/fetch-dashboard.sh 或把 ui/ 放入配置目录。")
 		return
 	}
 	if !a.ctrl.State().Running {
-		a.reportError("控制台", "核心未运行。")
+		a.reportError(T("控制台"), "核心未运行。")
 		return
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/ui", a.apiPort())
@@ -764,14 +764,14 @@ func subInfoLabel(s core.State) string {
 	info := s.SubInfo
 	if info == nil || info.Total <= 0 {
 		if s.SubProxies > 0 {
-			return fmt.Sprintf("订阅：%d 个节点", s.SubProxies)
+			return fmt.Sprintf(T("订阅：%d 个节点"), s.SubProxies)
 		}
-		return "订阅：无"
+		return T("订阅：无")
 	}
-	line := fmt.Sprintf("订阅流量 %s / %s · %d 个节点",
+	line := fmt.Sprintf(T("订阅流量 %s / %s · %d 个节点"),
 		humanBytes(info.Upload+info.Download), humanBytes(info.Total), s.SubProxies)
 	if !info.Expire.IsZero() {
-		line += " · 到期 " + info.Expire.Local().Format("2006-01-02")
+		line += T(" · 到期 ") + info.Expire.Local().Format("2006-01-02")
 	}
 	return line
 }

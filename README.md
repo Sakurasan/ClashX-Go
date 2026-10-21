@@ -18,6 +18,7 @@ needs no runtime download.
 
 **Menu bar, ClashX style**
 
+- UI in Simplified Chinese or English (follows the system language; `CLASHX_GO_LANG=en` forces English), the menu bar is fully localized
 - Native tray menu: outbound mode, policy groups with per-node latency
   badges (`✅ / ⚠️ / ❌`), node switching, latency tests, config management
 - Two-line live speed in the menu bar (`↑ / ↓`), fixed width so it never

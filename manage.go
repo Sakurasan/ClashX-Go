@@ -25,7 +25,7 @@ func (a *app) showManageWindow() {
 		m = &manageWindow{app: a, selected: -1}
 		m.list.Selected = &m.selected
 		m.win = mygo.NewWindow(mygo.WindowOptions{
-			Title: "托管的配置文件", Width: 640, Height: 360,
+			Title: T("托管的配置文件"), Width: 640, Height: 360,
 			Hidden: true, DisableMinimize: true,
 			Content: ui.View(m.view),
 		})
@@ -49,9 +49,9 @@ func (m *manageWindow) view(c *ui.Context) {
 	ui.Column(c).Fill().Padding(14).Gap(10).Children(func() {
 		ui.Text(c, "托管的配置文件：").FontSize(13).Bold()
 		cols := []ui.TableColumn{
-			{Title: "链接"},
-			{Title: "配置文件名称", Width: 150},
-			{Title: "更新时间", Width: 110},
+			{Title: T("链接")},
+			{Title: T("配置文件名称"), Width: 150},
+			{Title: T("更新时间"), Width: 110},
 		}
 		if ui.Table(c, &m.list, cols, len(profiles), func(row, col int) {
 			p := profiles[row]
@@ -73,9 +73,9 @@ func (m *manageWindow) view(c *ui.Context) {
 			}
 		}
 		ui.Row(c).Gap(8).Children(func() {
-			button.Button(c, button.Props{Label: "添加", Variant: button.Primary, OnClick: m.app.showSubscriptionDialog})
-			button.Button(c, button.Props{Label: "更新", Variant: button.Outline, OnClick: m.onUpdate})
-			button.Button(c, button.Props{Label: "删除", Variant: button.Destructive, OnClick: m.onDelete})
+			button.Button(c, button.Props{Label: T("添加"), Variant: button.Primary, OnClick: m.app.showSubscriptionDialog})
+			button.Button(c, button.Props{Label: T("更新"), Variant: button.Outline, OnClick: m.onUpdate})
+			button.Button(c, button.Props{Label: T("删除"), Variant: button.Destructive, OnClick: m.onDelete})
 		})
 	})
 }
@@ -97,25 +97,25 @@ func (m *manageWindow) onUpdate() {
 	go func() {
 		n, err := a.updateProfile(name)
 		if err != nil {
-			a.reportError("更新订阅", err.Error())
+			a.reportError(T("更新订阅"), err.Error())
 			return
 		}
 		a.menu.rebuild()
 		m.win.Update(func() {})
-		a.showToast("订阅已更新", fmt.Sprintf("%s：%d 个节点。", name, n))
+		a.showToast(T("订阅已更新"), fmt.Sprintf("%s：%d 个节点。", name, n))
 	}()
 }
 
 func (m *manageWindow) onDelete() {
 	p := m.current()
 	if p == nil {
-		m.app.reportError("删除", "请先在列表中选中一个订阅。")
+		m.app.reportError(T("删除"), "请先在列表中选中一个订阅。")
 		return
 	}
 	r, err := mygo.Dialog.Message(mygo.MessageOptions{
-		Type: mygo.MessageQuestion, Title: "删除订阅",
-		Message: fmt.Sprintf("确定删除订阅「%s」？其订阅文件会一并移除。", p.Name),
-		Buttons: []string{"删除", "取消"}, CancelButton: 1,
+		Type: mygo.MessageQuestion, Title: T("删除订阅"),
+		Message: fmt.Sprintf(T("确定删除订阅「%s」？其订阅文件会一并移除。"), p.Name),
+		Buttons: []string{T("删除"), "取消"}, CancelButton: 1,
 	})
 	if err != nil || r.Button != 0 {
 		return

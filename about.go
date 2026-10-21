@@ -52,7 +52,7 @@ func aboutView(c *ui.Context) {
 	ui.Column(c).FillWidth().Padding(24).AlignItems(ui.Center).Gap(8).Children(func() {
 		ui.Image(c, aboutIcon).Width(96).Height(96)
 		ui.Text(c, "ClashX Go").FontSize(20).Bold()
-		ui.Text(c, "版本: "+appVersion).FontSize(13)
+		ui.Text(c, T("版本: ")+appVersion).FontSize(13)
 		ui.Text(c, "Meta Core: "+core.CoreVersion).FontSize(13)
 		if built != "" {
 			ui.Text(c, built).FontSize(11).TextColor(c.Theme().TextMuted)
@@ -63,9 +63,9 @@ func aboutView(c *ui.Context) {
 		ui.Link(c, "GitHub for ClashX Go: https://github.com/Sakurasan/ClashX-go",
 			"https://github.com/Sakurasan/ClashX-go")
 		ui.Row(c).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "配置目录: ~/.config/clashx-go").FontSize(12)
+			ui.Text(c, T("配置目录: ~/.config/clashx-go")).FontSize(12)
 			button.Button(c, button.Props{
-				Label:   "打开",
+				Label:   T("打开"),
 				Variant: button.Outline,
 				OnClick: func() {
 					_ = mygo.Shell.OpenPath(coreDir())
@@ -107,7 +107,7 @@ func buildStamp() (rev, line string) {
 func (a *app) showAbout() {
 	if a.aboutWin == nil {
 		a.aboutWin = mygo.NewWindow(mygo.WindowOptions{
-			Title:             "关于 ClashX Go",
+			Title:             T("关于 ClashX Go"),
 			Width:             420,
 			Height:            420,
 			Hidden:            true,

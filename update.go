@@ -16,7 +16,7 @@ func (a *app) checkForUpdates() {
 	if !mygo.Updater.Enabled() {
 		_, _ = mygo.Dialog.Message(mygo.MessageOptions{
 			Type:    mygo.MessageInfo,
-			Title:   "检查更新",
+			Title:   T("检查更新"),
 			Message: "当前构建未启用更新检查。",
 			Detail: "需要在 mygo.json 配置 updates（publicKey + github 仓库），" +
 				"并用 mygo build 打包出 .app 运行。",
@@ -34,7 +34,7 @@ func (a *app) checkForUpdates() {
 		if up == nil {
 			_, _ = mygo.Dialog.Message(mygo.MessageOptions{
 				Type:    mygo.MessageInfo,
-				Title:   "检查更新",
+				Title:   T("检查更新"),
 				Message: "已是最新版本",
 				Detail:  appVersion,
 			})
@@ -46,7 +46,7 @@ func (a *app) checkForUpdates() {
 		}
 		res, err := mygo.Dialog.Message(mygo.MessageOptions{
 			Type:          mygo.MessageInfo,
-			Title:         "发现新版本",
+			Title:         T("发现新版本"),
 			Message:       up.Version,
 			Detail:        detail,
 			Buttons:       []string{"下载并安装", "取消"},
@@ -82,7 +82,7 @@ func (a *app) autoUpdateCheckLoop() {
 	}
 	n := mygo.NewNotification(mygo.NotificationOptions{
 		ID:    notificationUpdateID,
-		Title: "ClashX go 有新版本",
+		Title: T("ClashX go 有新版本"),
 		Body:  up.Version + " 可用，点击检查更新",
 	})
 	_ = n.Show()

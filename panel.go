@@ -38,8 +38,8 @@ func (p *panelApp) view(c *ui.Context) {
 		ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
 			segmented.Segmented(c, segmented.Props{
 				Selected: &p.tab,
-				Labels:   []string{"通用", "全局快捷键", "调试", "Meta"},
-				Label:    "设置页",
+				Labels:   []string{T("通用"), T("全局快捷键"), T("调试"), "Meta"},
+				Label:    T("设置页"),
 			})
 		})
 		// Scroll the page: the 通用 tab is taller than the window and used
@@ -84,15 +84,15 @@ func (p *panelApp) shortcutsPane(c *ui.Context) {
 	t := c.Theme()
 	a := p.app
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
-		ui.Text(c, "格式例如 CmdOrCtrl+Shift+P；留空并点设置即取消绑定。").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, T("格式例如 CmdOrCtrl+Shift+P；留空并点设置即取消绑定。")).FontSize(11).TextColor(t.TextMuted)
 		settingsGroup(c, "", func() {
 			for _, act := range a.shortcutActions() {
 				act := act
 				acc := a.settings.shortcuts[act.id]
 				settingsRow(c, act.label, func() {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.TextInput(c, &acc).Width(180).Placeholder("未设置")
-						ui.Button(c, "设置").OnClick(func() {
+						ui.TextInput(c, &acc).Width(180).Placeholder(T("未设置"))
+						ui.Text(c, T("设置")).OnClick(func() {
 							a.setShortcut(act.id, act.label, acc)
 						})
 					})
@@ -108,21 +108,21 @@ func (p *panelApp) debugPane(c *ui.Context) {
 	t := c.Theme()
 	a := p.app
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
-		settingsGroup(c, "日志", func() {
+		settingsGroup(c, T("日志"), func() {
 			ui.Text(c, a.ctrl.Manager().LogPath()).FontSize(11).TextColor(t.TextMuted).SingleLine()
 			ui.Row(c).Gap(8).Children(func() {
-				ui.Button(c, "打开日志").OnClick(func() {
+				ui.Text(c, T("打开日志")).OnClick(func() {
 					_ = mygo.Shell.OpenPath(a.ctrl.Manager().LogPath())
 				})
-				ui.Button(c, "打开配置目录").OnClick(func() {
+				ui.Text(c, T("打开配置目录")).OnClick(func() {
 					_ = mygo.Shell.OpenPath(coreDir())
 				})
-				ui.Button(c, "导出诊断包").OnClick(a.exportDiagnostics)
+				ui.Text(c, T("导出诊断包")).OnClick(a.exportDiagnostics)
 			})
 		})
-		settingsGroup(c, "系统代理", func() {
-			ui.Text(c, "立即把系统代理恢复为开启前的配置。").FontSize(11).TextColor(t.TextMuted)
-			ui.Button(c, "还原系统代理").OnClick(func() {
+		settingsGroup(c, T("系统代理"), func() {
+			ui.Text(c, T("立即把系统代理恢复为开启前的配置。")).FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, T("还原系统代理")).OnClick(func() {
 				go func() {
 					if err := restoreProxy(a.settings.proxyBackup); err != nil {
 						a.reportError("系统代理", err.Error())
@@ -134,10 +134,10 @@ func (p *panelApp) debugPane(c *ui.Context) {
 				}()
 			})
 		})
-		settingsGroup(c, "核心", func() {
+		settingsGroup(c, T("核心"), func() {
 			ui.Row(c).Gap(8).Children(func() {
-				ui.Button(c, "重载核心配置").OnClick(a.reloadCore)
-				ui.Button(c, "关闭所有连接").OnClick(func() {
+				ui.Text(c, T("重载核心配置")).OnClick(a.reloadCore)
+				ui.Text(c, T("关闭所有连接")).OnClick(func() {
 					go a.closeConnections()
 				})
 			})
@@ -150,18 +150,18 @@ func (p *panelApp) metaPane(c *ui.Context) {
 	t := c.Theme()
 	a := p.app
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
-		settingsGroup(c, "内核", func() {
+		settingsGroup(c, T("内核"), func() {
 			ui.Text(c, "Meta Core: "+core.CoreVersion).FontSize(12)
 			ui.Link(c, "GitHub for Clash Meta: https://github.com/MetaCubeX/mihomo",
 				"https://github.com/MetaCubeX/mihomo").FontSize(11)
 		})
-		settingsGroup(c, "配置目录", func() {
+		settingsGroup(c, T("配置目录"), func() {
 			ui.Text(c, "~/.config/clashx-go").FontSize(12).TextColor(t.TextMuted)
-			ui.Button(c, "打开配置目录").OnClick(func() {
+			ui.Text(c, T("打开配置目录")).OnClick(func() {
 				_ = mygo.Shell.OpenPath(coreDir())
 			})
 		})
-		settingsGroup(c, "应用", func() {
+		settingsGroup(c, T("应用"), func() {
 			ui.Button(c, "关于 ClashX Go").OnClick(a.showAbout)
 		})
 	})

@@ -234,7 +234,7 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(12).Children(func() {
 		settingsGroup(c, "", func() {
-			ui.Checkbox(c, &s.startAtLogin, "开机启动").OnChange(func() {
+			ui.Checkbox(c, &s.startAtLogin, T("开机启动")).OnChange(func() {
 				if err := mygo.App.SetOpenAtLogin(s.startAtLogin); err != nil {
 					// Roll the check box back and surface the error.
 					s.startAtLogin = !s.startAtLogin
@@ -242,62 +242,62 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 					if strings.Contains(msg, "needs an app bundle") {
 						msg = "当前以开发模式运行（非 .app 包），登录项不可用；用 mygo build 打包运行后即可设置。"
 					}
-					p.app.showToast("开机启动", msg)
+					p.app.showToast(T("开机启动"), msg)
 					return
 				}
 				saveSettings(coreDir(), p.app.settings)
 			})
-			ui.Checkbox(c, &s.noNotify, "减少通知").OnChange(func() {
+			ui.Checkbox(c, &s.noNotify, T("减少通知")).OnChange(func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
-			ui.Checkbox(c, &s.autoCheckUpd, "自动检查更新").OnChange(func() {
+			ui.Checkbox(c, &s.autoCheckUpd, T("自动检查更新")).OnChange(func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
 		})
-		ui.Text(c, "Clash 设置（保存并重启核心后生效）").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, T("Clash 设置（保存并重启核心后生效）")).FontSize(11).TextColor(t.TextMuted)
 		settingsGroup(c, "", func() {
-			ui.Checkbox(c, &s.ipv6, "启用 IPv6").OnChange(func() {
+			ui.Checkbox(c, &s.ipv6, T("启用 IPv6")).OnChange(func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
-			settingsRow(c, "代理端口", func() {
+			settingsRow(c, T("代理端口"), func() {
 				ui.TextInput(c, &s.mixedPort).Width(150)
 			})
-			settingsRow(c, "Api 端口", func() {
+			settingsRow(c, T("Api 端口"), func() {
 				ui.TextInput(c, &s.controller).Width(150)
 			})
-			settingsRow(c, "Api 密钥", func() {
-				ui.TextInput(c, &s.secret).Width(150).Placeholder("可选")
+			settingsRow(c, T("Api 密钥"), func() {
+				ui.TextInput(c, &s.secret).Width(150).Placeholder(T("可选"))
 			})
-			ui.Checkbox(c, &s.allowLAN, "允许局域网控制（不推荐）").OnChange(func() {
+			ui.Checkbox(c, &s.allowLAN, T("允许局域网控制（不推荐）")).OnChange(func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
 		})
-		settingsGroup(c, "在特定 WiFi SSID 下自动暂停", func() {
-			ui.Text(c, "使用英文逗号 (,) 分隔").FontSize(11).TextColor(t.TextMuted)
+		settingsGroup(c, T("在特定 WiFi SSID 下自动暂停"), func() {
+			ui.Text(c, T("使用英文逗号 (,) 分隔")).FontSize(11).TextColor(t.TextMuted)
 			ui.TextInput(c, &s.suspendSSIDs)
 		})
-		settingsGroup(c, "代理延迟测试地址", func() {
+		settingsGroup(c, T("代理延迟测试地址"), func() {
 			ui.TextInput(c, &s.benchmarkURL).Placeholder(defaultBenchmarkURL)
 		})
-		settingsGroup(c, "忽略这些主机与域的代理设置", func() {
-			ui.Text(c, "使用英文逗号 (,) 分隔").FontSize(11).TextColor(t.TextMuted)
+		settingsGroup(c, T("忽略这些主机与域的代理设置"), func() {
+			ui.Text(c, T("使用英文逗号 (,) 分隔")).FontSize(11).TextColor(t.TextMuted)
 			ui.TextInput(c, &s.proxyBypass)
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-				ui.Button(c, "重置").OnClick(func() {
+				ui.Text(c, T("重置")).OnClick(func() {
 					s.proxyBypass = defaultProxyBypass
 					saveSettings(coreDir(), p.app.settings)
 					p.app.win.Update(func() {})
 				})
 			})
 		})
-		ui.Text(c, "配置文件").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, T("配置文件")).FontSize(11).TextColor(t.TextMuted)
 		settingsGroup(c, "", func() {
-			settingsRow(c, "本地配置", func() {
+			settingsRow(c, T("本地配置"), func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.TextInput(c, &s.configPath).Width(240).Placeholder("config.yaml")
-					ui.Button(c, "浏览…").OnClick(func() {
+					ui.Text(c, T("浏览…")).OnClick(func() {
 						files, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-							Title:   "选择 Clash 配置",
+							Title:   T("选择 Clash 配置"),
 							Filters: []mygo.FileFilter{{Name: "YAML 配置", Extensions: []string{"yaml", "yml"}}},
 						})
 						if err == nil && len(files) > 0 {
@@ -308,7 +308,7 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			})
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
 				button.Button(c, button.Props{
-					Label:   "保存并重启核心",
+					Label:   T("保存并重启核心"),
 					Variant: button.Primary,
 					Size:    button.Sm,
 					OnClick: func() {
@@ -340,9 +340,9 @@ func (p *panelApp) saveAndRestart() {
 			}
 		}
 		if err := p.app.applyConfig(cfg); err != nil {
-			p.app.showToast("重启失败", err.Error())
+			p.app.showToast(T("重启失败"), err.Error())
 		} else {
-			p.app.showToast("核心已重启", "正在使用新的设置运行。")
+			p.app.showToast(T("核心已重启"), T("正在使用新的设置运行。"))
 		}
 	}()
 }

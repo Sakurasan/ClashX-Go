@@ -24,9 +24,9 @@ type subscriptionDialog struct {
 func (a *app) showSubscriptionDialog() {
 	d := a.subDlg
 	if d == nil {
-		d = &subscriptionDialog{app: a, title: "添加订阅"}
+		d = &subscriptionDialog{app: a, title: T("添加订阅")}
 		d.win = mygo.NewWindow(mygo.WindowOptions{
-			Title: "添加订阅", Width: 480, Height: 170,
+			Title: T("添加订阅"), Width: 480, Height: 170,
 			Hidden: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
 			Content: ui.View(d.view),
 		})
@@ -42,11 +42,11 @@ func (d *subscriptionDialog) view(c *ui.Context) {
 	t := c.Theme()
 	c.SetTheme(tokens.For(t.Dark))
 	ui.Column(c).Fill().Padding(16).Gap(10).Children(func() {
-		ui.Text(c, "Clash 订阅链接 — 下载后作为一个托管配置文件加入列表").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, T("Clash 订阅链接 — 下载后作为一个托管配置文件加入列表")).FontSize(12).TextColor(t.TextMuted)
 		input.Input(c, input.Props{Value: &d.url, Placeholder: "https://…/subscribe?token=…"}).FillWidth()
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
-			button.Button(c, button.Props{Label: "取消", Variant: button.Outline, OnClick: d.win.Hide})
-			button.Button(c, button.Props{Label: "添加", Variant: button.Primary, OnClick: d.save})
+			button.Button(c, button.Props{Label: T("取消"), Variant: button.Outline, OnClick: d.win.Hide})
+			button.Button(c, button.Props{Label: T("添加"), Variant: button.Primary, OnClick: d.save})
 		})
 	})
 }
@@ -60,7 +60,7 @@ func (d *subscriptionDialog) save() {
 	a := d.app
 	go func() {
 		if err := a.addProfile(url); err != nil {
-			a.reportError("添加订阅", err.Error())
+			a.reportError(T("添加订阅"), err.Error())
 		}
 	}()
 }
