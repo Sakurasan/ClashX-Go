@@ -68,14 +68,20 @@ jobs:
           mkdir -p dist
           cp build/darwin-universal/*.dmg "dist/ClashX go ${version}.dmg"
 
-      # Drop the mygo-named asset so the nightly does not accumulate.
-      - name: Clean legacy nightly assets
+      # The Nightly is a rolling release: drop every DMG it accumulated,
+      # then let the publish step upload the current version's single one.
+      - name: Clean old nightly DMGs
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete-asset nightly clashx-go.0.1.0.dmg --yes || true
-          gh release delete-asset nightly "ClashX go.dmg" --yes || true
+          assets=$(gh release view nightly --json assets --jq '.assets[].name' 2>/dev/null || true)
+          printf '%s\n' "$assets" | while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            case "$name" in
+              *.dmg) gh release delete-asset nightly "$name" --yes || true ;;
+            esac
+          done
 
       - name: Publish nightly
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
