@@ -54,6 +54,7 @@ jobs:
       - name: Name disk image
         run: |
           version=$(python3 -c 'import json;print(json.load(open("mygo.json"))["version"])')
+          echo "VERSION=$version" >> "$GITHUB_ENV"
           mkdir -p dist
           cp build/darwin-universal/*.dmg "dist/ClashX go ${version}.dmg"
 
@@ -83,11 +84,35 @@ jobs:
             build/darwin-universal/*.zip
           fail_on_unmatched_files: false
 
+      # The release page carries the curated notes from CHANGELOG.md: the
+      # tag's ## <version> section, not GitHub's commit-generated notes.
+      - name: Build release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(python3 -c 'import json;print(json.load(open("mygo.json"))["version"])')
+          python3 - "$version" <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(rf"^## {re.escape(version)}\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+          if not m:
+              sys.exit(f"CHANGELOG.md has no ## {version} section")
+          body = (
+              f"ClashX go {version} 正式发布。\n\n"
+              f"## 更新内容\n{m.group(1).strip()}\n\n"
+              "---\n\n"
+              f"下载 `ClashX go {version}.dmg` 安装。macOS 11+，"
+              "Intel 与 Apple Silicon 通用。\n"
+          )
+          open("dist/release-notes.md", "w", encoding="utf-8").write(body)
+          PY
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: ClashX go ${{ env.VERSION }}
+          body_path: dist/release-notes.md
           files: |
             dist/ClashX go *.dmg
             build/darwin-universal/*.tar.gz
