@@ -42,6 +42,16 @@ jobs:
           MYGO_UPDATER_PRIVATE_KEY: ${{ github.ref_type == 'tag' && secrets.MYGO_UPDATER_PRIVATE_KEY || '' }}
         run: go tool mygo build -platform darwin/universal
 
+      # The release is universal; publish the same signed manifest under the
+      # per-arch names too. Apps built with a single arch (e.g. a plain
+      # `mygo build` on a developer machine) then find a feed and install
+      # the universal archive instead of a 404.
+      - name: Add per-arch update feeds
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cp build/darwin-universal/update-darwin-universal.json build/darwin-universal/update-darwin-amd64.json
+          cp build/darwin-universal/update-darwin-universal.json build/darwin-universal/update-darwin-arm64.json
+
       - name: Upload app and disk image
         uses: actions/upload-artifact@v4
         with:
