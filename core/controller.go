@@ -409,6 +409,11 @@ func (c *Controller) CloseConnections(ctx context.Context) error {
 	return c.client.CloseConnections(ctx)
 }
 
+// CloseConnection closes one active connection by ID.
+func (c *Controller) CloseConnection(ctx context.Context, id string) error {
+	return c.client.CloseConnection(ctx, id)
+}
+
 // RefreshSubscription re-downloads the subscription and, when the core is
 // running, reloads providers so the new nodes take effect immediately. It
 // returns the number of proxies in the freshly downloaded file.

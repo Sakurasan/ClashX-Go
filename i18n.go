@@ -12,13 +12,28 @@ import (
 // (used by tests and for trying the English UI).
 var uiLang = detectLang()
 
-func detectLang() string {
-	if v := strings.ToLower(os.Getenv("CLASHX_GO_LANG")); v != "" {
+func detectLang() string { return resolveLang("") }
+
+// resolveLang picks the UI language: the CLASHX_GO_LANG override wins, then
+// the saved setting ("" follows the system), then macOS's preferred
+// language.
+func resolveLang(setting string) string {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("CLASHX_GO_LANG"))); v != "" {
 		if strings.HasPrefix(v, "en") {
 			return "en"
 		}
 		return "zh"
 	}
+	switch setting {
+	case "en":
+		return "en"
+	case "zh":
+		return "zh"
+	}
+	return systemLang()
+}
+
+func systemLang() string {
 	out, err := exec.Command("defaults", "read", "-g", "AppleLanguages").Output()
 	if err != nil {
 		return "zh"
@@ -82,8 +97,15 @@ var en = map[string]string{
 	"API 端口":        "API Port",
 
 	// Settings tabs and General
-	"通用":    "General",
-	"连接":    "Connections",
+	"通用":   "General",
+	"连接":   "Connections",
+	"语言":   "Language",
+	"界面语言": "Interface Language",
+	"跟随系统": "System",
+	"跟随系统时使用 macOS 的首选语言。": "Uses macOS's preferred language.",
+	"核心已停止": "Core stopped",
+	"核心运行中": "Core running",
+	"模式":    "mode",
 	"分流":    "Routing",
 	"全局快捷键": "Shortcuts",
 	"调试":    "Debug",
@@ -121,6 +143,11 @@ var en = map[string]string{
 	"链路":         "Chain",
 	"流量":         "Traffic",
 	"双击一行查看连接详情": "Double-click a row for details",
+	"复制主机":       "Copy Host",
+	"复制进程":       "Copy Process",
+	"复制规则":       "Copy Rule",
+	"复制链路":       "Copy Chain",
+	"关闭此连接":      "Close Connection",
 	"搜索规则…":      "Search rules…",
 	"共 %d 条规则":   "%d rules",
 	"正在读取规则…":    "Loading rules…",

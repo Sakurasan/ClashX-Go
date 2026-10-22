@@ -428,6 +428,20 @@ func (c *Client) StreamTraffic(ctx context.Context, fn func(Traffic)) error {
 	}
 }
 
+// CloseConnection closes one active connection by ID.
+func (c *Client) CloseConnection(ctx context.Context, id string) error {
+	path := "/connections/" + url.PathEscape(id)
+	resp, err := c.do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("DELETE %s: HTTP %d", path, resp.StatusCode)
+	}
+	return nil
+}
+
 // CloseConnections closes every active connection.
 func (c *Client) CloseConnections(ctx context.Context) error {
 	resp, err := c.do(ctx, http.MethodDelete, "/connections", nil)

@@ -51,7 +51,7 @@ func TestPanelSettings(t *testing.T) {
 	if !tt.HasText("保存并重启核心") {
 		t.Errorf("save button missing, texts %q", tt.Texts())
 	}
-	for _, want := range []string{"启用 IPv6", "允许局域网控制（不推荐）", "代理延迟测试地址", "在特定 WiFi SSID 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "自动检查更新", "重置"} {
+	for _, want := range []string{"界面语言", "跟随系统", "启用 IPv6", "允许局域网控制（不推荐）", "代理延迟测试地址", "在特定 WiFi SSID 下自动暂停", "忽略这些主机与域的代理设置", "减少通知", "自动检查更新", "重置"} {
 		if !tt.HasText(want) {
 			t.Errorf("meta general setting %q missing, texts %q", want, tt.Texts())
 		}
@@ -375,6 +375,26 @@ func TestConnectionsPaneStates(t *testing.T) {
 	}
 }
 
+// The environment override wins over the saved setting; a saved "en" or
+// "zh" wins over the system language.
+func TestResolveLang(t *testing.T) {
+	t.Setenv("CLASHX_GO_LANG", "")
+	if got := resolveLang("en"); got != "en" {
+		t.Errorf("resolveLang(en) = %q", got)
+	}
+	if got := resolveLang("zh"); got != "zh" {
+		t.Errorf("resolveLang(zh) = %q", got)
+	}
+	t.Setenv("CLASHX_GO_LANG", "en")
+	if got := resolveLang("zh"); got != "en" {
+		t.Errorf("env override = %q, want en", got)
+	}
+	t.Setenv("CLASHX_GO_LANG", "zh")
+	if got := resolveLang("en"); got != "zh" {
+		t.Errorf("env override = %q, want zh", got)
+	}
+}
+
 func TestMain(m *testing.M) {
 	// Tests assert the Chinese UI; CI runners default to English.
 	os.Setenv("CLASHX_GO_LANG", "zh")
@@ -389,7 +409,7 @@ func TestPanelSettingsEnglish(t *testing.T) {
 	a := testApp(t)
 	p := &panelApp{app: a}
 	tt := ui.NewTester(p.view, 520, 720)
-	for _, want := range []string{"Connections", "Proxy Port", "Save & Restart Core", "Enable IPv6", "Check for Updates Automatically"} {
+	for _, want := range []string{"Connections", "Interface Language", "System", "Proxy Port", "Save & Restart Core", "Enable IPv6", "Check for Updates Automatically"} {
 		if !tt.HasText(want) {
 			t.Errorf("english UI missing %q, texts %q", want, tt.Texts())
 		}

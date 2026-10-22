@@ -81,6 +81,9 @@ type settings struct {
 	selections     []savedSelection
 	// shortcuts maps action id -> accelerator (e.g. "CmdOrCtrl+Shift+P").
 	shortcuts map[string]string
+	// lang is the interface language: "", "zh" or "en"; empty follows the
+	// system.
+	lang string
 	// proxyBackup is the user's own system-proxy config captured before we
 	// overwrote it; restoring it beats switching ours off.
 	proxyBackup *systemProxyBackup
@@ -113,6 +116,7 @@ type settingsJSON struct {
 	AppRules       []appRoutingRule      `json:"appRules,omitempty"`
 	Selections     []savedSelection      `json:"selections,omitempty"`
 	Shortcuts      map[string]string     `json:"shortcuts,omitempty"`
+	Lang           string                `json:"lang,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
 	// Legacy single-subscription field, migrated into Profiles on load.
 	SubscriptionURL string `json:"subscriptionURL,omitempty"`
@@ -176,6 +180,7 @@ func loadSettings(dir string) *settings {
 	if w.Shortcuts != nil {
 		s.shortcuts = w.Shortcuts
 	}
+	s.lang = w.Lang
 	s.proxyBackup = w.ProxyBackup
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
@@ -239,6 +244,7 @@ func saveSettings(dir string, s *settings) {
 		AppRules:       s.appRules,
 		Selections:     s.selections,
 		Shortcuts:      s.shortcuts,
+		Lang:           s.lang,
 		ProxyBackup:    s.proxyBackup,
 		ShowTraffic:    &s.showTraffic,
 	}
@@ -255,6 +261,16 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 	s := p.app.settings
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(14).Children(func() {
+		settingsGroup(c, T("语言"), func() {
+			settingsRow(c, T("界面语言"), func() {
+				ui.Row(c).Padding(2).Radius(7).Background(t.Text.Alpha(0.08)).Children(func() {
+					choiceSegment(c, T("跟随系统"), s.lang == "", func() { p.app.setLanguage("") })
+					choiceSegment(c, "简体中文", s.lang == "zh", func() { p.app.setLanguage("zh") })
+					choiceSegment(c, "English", s.lang == "en", func() { p.app.setLanguage("en") })
+				})
+			})
+			ui.Text(c, T("跟随系统时使用 macOS 的首选语言。")).FontSize(11).TextColor(t.TextMuted)
+		})
 		settingsGroup(c, "", func() {
 			settingsSwitch(c, T("开机启动"), &s.startAtLogin, func() {
 				if err := mygo.App.SetOpenAtLogin(s.startAtLogin); err != nil {

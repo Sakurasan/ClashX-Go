@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/smallnest/uix/components/empty"
 	"github.com/smallnest/uix/components/segmented"
@@ -163,6 +165,28 @@ func (p *panelApp) activeConnsView(c *ui.Context) {
 	}
 	p.connTable.Selected = &p.connSel
 	p.connTable.Key = func(row int) any { return rows[row].ID }
+	p.connTable.CellMenu = func(m *ui.Menu, row, col int) {
+		if row < 0 || row >= len(rows) {
+			return
+		}
+		conn := rows[row]
+		if m.Item(T("复制主机")).Chosen() {
+			copyText(connHost(conn))
+		}
+		if m.Item(T("复制进程")).Chosen() {
+			copyText(connProcess(conn))
+		}
+		if m.Item(T("复制规则")).Chosen() {
+			copyText(connRule(conn))
+		}
+		if m.Item(T("复制链路")).Chosen() {
+			copyText(connChain(conn))
+		}
+		m.Separator()
+		if m.Item(T("关闭此连接")).Chosen() {
+			go p.app.closeConnection(conn.ID)
+		}
+	}
 	cols := []ui.TableColumn{
 		{Title: T("主机"), MinWidth: 120},
 		{Title: T("匹配规则"), Width: 110, MinWidth: 70},
@@ -326,6 +350,23 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+func copyText(s string) {
+	if s == "" || s == "—" {
+		return
+	}
+	if err := mygo.Clipboard.Write(transfer.TextData(s)); err != nil {
+		log.Printf("复制失败: %v", err)
+	}
+}
+
+func (a *app) closeConnection(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.ctrl.CloseConnection(ctx, id); err != nil {
+		log.Printf("关闭连接失败: %v", err)
+	}
 }
 
 // compactBytes saves the space in a table cell: 1.2KB rather than 1.2 KB.

@@ -40,6 +40,9 @@ type app struct {
 	// configured port stays untouched, so a port still finishing shutdown
 	// changes only this run's dashboard URL, never the saved preference.
 	activeAPI int
+	// trayDark is the appearance of the menu bar, kept by the tray's
+	// OnAppearanceChange so the colored running icon stays legible.
+	trayDark bool
 
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
 	// against a still-finishing operation. reloadMu serialises background
@@ -52,6 +55,15 @@ func main() {
 	a := &app{}
 	mygo.App.SetName("ClashX Go")
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	// A second launch hands its command line (and, on macOS, the activation
+	// token) to this instance and exits; show the preferences window here
+	// instead of failing to start.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		a.onSecondInstance()
+	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
 	mygo.App.WhenReady(a.ready)
 	if err := mygo.App.Run(); err != nil {
@@ -74,16 +86,12 @@ func (a *app) ready() {
 	dir := coreDir()
 	setupLogging(dir)
 	log.Printf("启动：配置目录 %s", dir)
-	if !singleInstanceLock(filepath.Join(dir, "app.lock")) {
-		mygo.Dialog.Error("ClashX Go", "程序已在运行中，请勿启动第二个实例。")
-		mygo.App.Quit()
-		return
-	}
 	mgr, err := core.NewManager(dir)
 	if err != nil {
 		log.Fatal("core dir: ", err)
 	}
 	a.settings = loadSettings(dir)
+	uiLang = resolveLang(a.settings.lang)
 	a.activeAPI = parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
 	log.Printf("启动：tun=%t systemProxy=%t profile=%q config=%q",
 		a.settings.tun, a.settings.systemProxy, a.settings.activeProfile, a.settings.configPath)
@@ -97,6 +105,7 @@ func (a *app) ready() {
 	// Tray: clicking opens the ClashX-style menu; the window behind
 	// 更多设置 is the preferences window.
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
+		ID:             "clashx-go",
 		Icon:           trayIcon(color.NRGBA{A: 255}),
 		IconIsTemplate: true,
 		ToolTip:        "ClashX Go",
@@ -106,6 +115,11 @@ func (a *app) ready() {
 	}
 	a.menu = &trayMenu{app: a}
 	a.menu.build(a.ctrl.State())
+	a.trayDark = a.tray.Dark()
+	a.tray.OnAppearanceChange(func() {
+		a.trayDark = a.tray.Dark()
+		a.refreshTrayIcon()
+	})
 	a.applyShortcuts()
 	if runtime.GOOS == "linux" {
 		a.tray.SetMenu(a.menu.menu)
@@ -268,9 +282,9 @@ func (a *app) onState(s core.State) {
 	}
 	a.win.Update(func() {
 		if a.tray != nil {
-			status := "核心已停止"
+			status := T("核心已停止")
 			if s.Running {
-				status = "核心运行中 · 模式 " + s.Mode
+				status = T("核心运行中") + " · " + T("模式") + " " + modeName(s.Mode)
 			}
 			a.tray.SetToolTip("ClashX Go — " + status)
 		}
@@ -652,14 +666,62 @@ func (a *app) proxyActive() bool {
 // running one, like ClashX's icon state. Without system proxy or TUN the
 // running paw is drawn at reduced opacity (ClashX Meta's dimmed state).
 func (a *app) updateTrayIcon(running bool) {
+	// System blue reads on a light menu bar; a lighter tint keeps it
+	// visible when the bar is dark.
+	blue := color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+	if a.trayDark {
+		blue = color.NRGBA{R: 96, G: 165, B: 250, A: 255}
+	}
 	switch {
 	case !running:
 		_ = a.tray.SetIcon(trayIcon(color.NRGBA{A: 255}), true)
 	case a.proxyActive():
-		_ = a.tray.SetIcon(trayIcon(color.NRGBA{R: 37, G: 99, B: 235, A: 255}), false)
+		_ = a.tray.SetIcon(trayIcon(blue), false)
 	default:
-		_ = a.tray.SetIcon(trayIcon(color.NRGBA{R: 37, G: 99, B: 235, A: 110}), false)
+		blue.A = 110
+		_ = a.tray.SetIcon(trayIcon(blue), false)
 	}
+}
+
+// setLanguage switches the interface language and rebuilds the surfaces
+// that localise their labels at draw time: the menu, the settings window,
+// dialogs and the tray tool tip.
+func (a *app) setLanguage(lang string) {
+	if a.settings == nil || a.settings.lang == lang {
+		return
+	}
+	a.settings.lang = lang
+	saveSettings(coreDir(), a.settings)
+	uiLang = resolveLang(lang)
+	if a.menu != nil {
+		a.menu.rebuild()
+	}
+	a.onState(a.ctrl.State()) // the tray tool tip
+	if a.win != nil {
+		a.win.SetTitle(T("ClashX 设置"))
+		a.win.Update(func() {})
+	}
+	if a.aboutWin != nil {
+		a.aboutWin.SetTitle(T("关于 ClashX Go"))
+		a.aboutWin.Update(func() {})
+	}
+	if a.manage != nil && a.manage.win != nil {
+		a.manage.win.SetTitle(T("托管的配置文件"))
+		a.manage.win.Update(func() {})
+	}
+	if a.subDlg != nil && a.subDlg.win != nil {
+		a.subDlg.win.SetTitle(T("添加订阅"))
+		a.subDlg.win.Update(func() {})
+	}
+}
+
+// onSecondInstance shows the preferences window when the user launches the
+// app again: the second process has already handed over and exited.
+func (a *app) onSecondInstance() {
+	if a.win == nil || a.tray == nil {
+		return
+	}
+	a.showSettings()
 }
 
 // coreDir is our own config folder, a sibling of ClashX Meta's

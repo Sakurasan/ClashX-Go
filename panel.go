@@ -168,6 +168,22 @@ func settingsDanger(c *ui.Context, label string, fn func()) {
 	ui.Text(c, label).FontSize(12).TextColor(c.Theme().Danger).OnClick(fn)
 }
 
+// choiceSegment draws one segment of a compact segmented control.
+func choiceSegment(c *ui.Context, label string, selected bool, fn func()) {
+	t := c.Theme()
+	el := ui.Text(c, label).FontSize(11).Padding(2, 8).Radius(5)
+	if selected {
+		thumb := t.Background
+		if t.Dark {
+			thumb = t.SurfaceHover
+		}
+		el.Background(thumb).TextColor(t.Text)
+	} else {
+		el.TextColor(t.TextMuted)
+	}
+	el.OnClick(fn)
+}
+
 // settingsGroup wraps related settings in one rounded box, mirroring the
 // grouped NSBoxes of ClashX Meta's preferences window.
 func settingsGroup(c *ui.Context, title string, body func()) {

@@ -23,6 +23,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	s.configPath = "/tmp/my.yaml"
 	s.startAtLogin = true
 	s.tunDNS = "8.8.8.8"
+	s.lang = "en"
 	s.appRules = []appRoutingRule{{Name: "Telegram", Process: "Telegram", Path: "/Applications/Telegram.app", Target: "proxy"}}
 	saveSettings(dir, s)
 
@@ -47,6 +48,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if got.tunDNS != "8.8.8.8" {
 		t.Errorf("tunDNS = %q, want 8.8.8.8", got.tunDNS)
+	}
+	if got.lang != "en" {
+		t.Errorf("lang = %q, want en", got.lang)
 	}
 	if len(got.appRules) != 1 || got.appRules[0].Process != "Telegram" ||
 		got.appRules[0].Path != "/Applications/Telegram.app" || got.appRules[0].Target != "proxy" {

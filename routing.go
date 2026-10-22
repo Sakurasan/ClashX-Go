@@ -31,10 +31,10 @@ func (p *panelApp) routingPane(c *ui.Context) {
 						ui.Text(c, "PROCESS-NAME "+rule.Process).FontSize(10).TextColor(t.TextMuted).SingleLine()
 					})
 					ui.Row(c).Padding(2).Radius(7).Background(t.Text.Alpha(0.08)).Children(func() {
-						routingChoice(c, T("直连"), rule.Target == "direct", func() {
+						choiceSegment(c, T("直连"), rule.Target == "direct", func() {
 							a.setAppRuleTarget(i, "direct")
 						})
-						routingChoice(c, T("代理"), rule.Target != "direct", func() {
+						choiceSegment(c, T("代理"), rule.Target != "direct", func() {
 							a.setAppRuleTarget(i, "proxy")
 						})
 					})
@@ -131,22 +131,6 @@ func plistValue(plist, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// routingChoice draws one segment of the compact Direct/Proxy control.
-func routingChoice(c *ui.Context, label string, selected bool, fn func()) {
-	t := c.Theme()
-	el := ui.Text(c, label).FontSize(11).Padding(2, 8).Radius(5)
-	if selected {
-		thumb := t.Background
-		if t.Dark {
-			thumb = t.SurfaceHover
-		}
-		el.Background(thumb).TextColor(t.Text)
-	} else {
-		el.TextColor(t.TextMuted)
-	}
-	el.OnClick(fn)
 }
 
 func (a *app) setAppRuleTarget(i int, target string) {
