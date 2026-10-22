@@ -67,9 +67,9 @@ func aboutView(c *ui.Context) {
 			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 				ui.Link(c, "mihomo", "https://github.com/MetaCubeX/mihomo").FontSize(12)
 				ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted)
-				ui.Link(c, "ClashX Go", "https://github.com/Sakurasan/ClashX-go").FontSize(12)
+				ui.Link(c, "ClashX Go", "https://github.com/Sakurasan/ClashX-Go").FontSize(12)
 				ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted)
-				ui.Link(c, "AGPL-3.0", "https://github.com/Sakurasan/ClashX-go/blob/main/LICENSE").FontSize(12)
+				ui.Link(c, "AGPL-3.0", "https://github.com/Sakurasan/ClashX-Go/blob/main/LICENSE").FontSize(12)
 			})
 		})
 		ui.Spacer(c)

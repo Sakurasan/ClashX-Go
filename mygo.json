@@ -6,7 +6,8 @@
   "icon": "assets/icon.png",
   "updates": {
     "publicKey": "X0Bk+HCwfT3YOijVA0BvxDrnERZ4084oDoU6WBvT1pA=",
-    "github": "Sakurasan/ClashX-go",
-    "tagPrefix": "v"
+    "github": "Sakurasan/ClashX-Go",
+    "tagPrefix": "v",
+    "deltas": 1
   }
 }

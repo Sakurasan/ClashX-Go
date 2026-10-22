@@ -80,7 +80,7 @@ needs no runtime download.
 ## Install
 
 Download `ClashX Go <version>.dmg` from the
-[Releases page](https://github.com/Sakurasan/ClashX-go/releases), open it and
+[Releases page](https://github.com/Sakurasan/ClashX-Go/releases), open it and
 drag `ClashX Go.app` into `Applications`.
 
 The app is ad-hoc signed (no Developer ID), so the first launch may be
@@ -211,7 +211,7 @@ assets/              app icon and menu bar cat (embedded)
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Sakurasan/ClashX-go&type=Date)](https://star-history.com/#Sakurasan/ClashX-go&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Sakurasan/ClashX-Go&type=Date)](https://star-history.com/#Sakurasan/ClashX-Go&Date)
 
 ## License
 

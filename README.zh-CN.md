@@ -70,7 +70,7 @@
 
 ## 安装
 
-从 [Releases 页面](https://github.com/Sakurasan/ClashX-go/releases) 下载
+从 [Releases 页面](https://github.com/Sakurasan/ClashX-Go/releases) 下载
 `ClashX Go <版本号>.dmg`，打开后把 `ClashX Go.app` 拖进「应用程序」。
 
 应用为 ad-hoc 签名（没有 Developer ID），首次启动可能被 Gatekeeper 拦截：
@@ -190,7 +190,7 @@ assets/              应用图标与菜单栏猫图标（内嵌）
 
 ## Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Sakurasan/ClashX-go&type=Date)](https://star-history.com/#Sakurasan/ClashX-go&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Sakurasan/ClashX-Go&type=Date)](https://star-history.com/#Sakurasan/ClashX-Go&Date)
 
 ## 许可证
 
