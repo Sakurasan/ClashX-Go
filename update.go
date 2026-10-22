@@ -82,7 +82,7 @@ func (a *app) autoUpdateCheckLoop() {
 	}
 	n := mygo.NewNotification(mygo.NotificationOptions{
 		ID:    notificationUpdateID,
-		Title: T("ClashX go 有新版本"),
+		Title: T("ClashX Go 有新版本"),
 		Body:  up.Version + " 可用，点击检查更新",
 	})
 	_ = n.Show()

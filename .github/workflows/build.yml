@@ -66,7 +66,7 @@ jobs:
           version=$(python3 -c 'import json;print(json.load(open("mygo.json"))["version"])')
           echo "VERSION=$version" >> "$GITHUB_ENV"
           mkdir -p dist
-          cp build/darwin-universal/*.dmg "dist/ClashX go ${version}.dmg"
+          cp build/darwin-universal/*.dmg "dist/ClashX Go ${version}.dmg"
 
       # The Nightly is a rolling release: drop every DMG it accumulated,
       # then let the publish step upload the current version's single one.
@@ -95,7 +95,7 @@ jobs:
           body: |
             Automated build of `main` at ${{ github.sha }}.
           files: |
-            dist/ClashX go *.dmg
+            dist/ClashX Go *.dmg
             build/darwin-universal/*.tar.gz
             build/darwin-universal/*.zip
           fail_on_unmatched_files: false
@@ -114,10 +114,10 @@ jobs:
           if not m:
               sys.exit(f"CHANGELOG.md has no ## {version} section")
           body = (
-              f"ClashX go {version} 正式发布。\n\n"
+              f"ClashX Go {version} 正式发布。\n\n"
               f"## 更新内容\n{m.group(1).strip()}\n\n"
               "---\n\n"
-              f"下载 `ClashX go {version}.dmg` 安装。macOS 11+，"
+              f"下载 `ClashX Go {version}.dmg` 安装。macOS 11+，"
               "Intel 与 Apple Silicon 通用。\n"
           )
           open("dist/release-notes.md", "w", encoding="utf-8").write(body)
@@ -127,10 +127,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: ClashX go ${{ env.VERSION }}
+          name: ClashX Go ${{ env.VERSION }}
           body_path: dist/release-notes.md
           files: |
-            dist/ClashX go *.dmg
+            dist/ClashX Go *.dmg
             build/darwin-universal/*.tar.gz
             build/darwin-universal/*.zip
             build/darwin-universal/update-*.json

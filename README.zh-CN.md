@@ -71,7 +71,7 @@
 ## 安装
 
 从 [Releases 页面](https://github.com/Sakurasan/ClashX-go/releases) 下载
-`ClashX go <版本号>.dmg`，打开后把 `ClashX go.app` 拖进「应用程序」。
+`ClashX Go <版本号>.dmg`，打开后把 `ClashX Go.app` 拖进「应用程序」。
 
 应用为 ad-hoc 签名（没有 Developer ID），首次启动可能被 Gatekeeper 拦截：
 右键应用 → **打开**，或在「系统设置 → 隐私与安全性」中允许。
@@ -83,7 +83,7 @@
 ```sh
 scripts/fetch-cores.sh                  # mihomo v1.19.32（arm64 + amd64）
 scripts/build-dnshelper.sh              # 通用 Tun DNS 提权组件
-go tool mygo build                      # -> build/darwin-<arch>/ClashX go.app + .dmg
+go tool mygo build                      # -> build/darwin-<arch>/ClashX Go.app + .dmg
 go tool mygo build -platform darwin/universal   # 通用版 .app + 通用内核
 ```
 

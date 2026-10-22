@@ -57,7 +57,7 @@ func diagSummary(a *app) string {
 	var b strings.Builder
 	s := a.settings
 	st := a.ctrl.State()
-	fmt.Fprintf(&b, "ClashX go %s (core %s)\n", appVersion, core.CoreVersion)
+	fmt.Fprintf(&b, "ClashX Go %s (core %s)\n", appVersion, core.CoreVersion)
 	fmt.Fprintf(&b, "time: %s\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "os: %s/%s, macOS %s\n", runtime.GOOS, runtime.GOARCH, strings.TrimSpace(cmdOut("sw_vers", "-productVersion")))
 	fmt.Fprintf(&b, "running: %t, mode: %s, groups: %d\n", st.Running, st.Mode, len(st.Groups))

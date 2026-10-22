@@ -79,9 +79,9 @@ needs no runtime download.
 
 ## Install
 
-Download `ClashX go <version>.dmg` from the
+Download `ClashX Go <version>.dmg` from the
 [Releases page](https://github.com/Sakurasan/ClashX-go/releases), open it and
-drag `ClashX go.app` into `Applications`.
+drag `ClashX Go.app` into `Applications`.
 
 The app is ad-hoc signed (no Developer ID), so the first launch may be
 blocked by Gatekeeper: right-click the app → **Open**, or allow it in
@@ -94,7 +94,7 @@ Fetch the mihomo core for both architectures first, then build the app:
 ```sh
 scripts/fetch-cores.sh                  # mihomo v1.19.32 for arm64 + amd64
 scripts/build-dnshelper.sh              # universal Tun DNS helper
-go tool mygo build                      # -> build/darwin-<arch>/ClashX go.app + .dmg
+go tool mygo build                      # -> build/darwin-<arch>/ClashX Go.app + .dmg
 go tool mygo build -platform darwin/universal   # universal app + universal core
 ```
 
