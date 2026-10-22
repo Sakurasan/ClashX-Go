@@ -134,4 +134,5 @@ jobs:
             build/darwin-universal/*.tar.gz
             build/darwin-universal/*.zip
             build/darwin-universal/update-*.json
+            build/darwin-universal/*.delta
           fail_on_unmatched_files: false
