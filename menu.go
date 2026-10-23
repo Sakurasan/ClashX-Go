@@ -7,7 +7,9 @@ import (
 	"net"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -746,17 +748,82 @@ func (a *app) apiPort() int {
 }
 
 // localIP returns the primary LAN IPv4 for the 帮助 info line.
-func localIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "—"
+// lanCandidate is one interface's IPv4 addresses for chooseLocalIP.
+type lanCandidate struct {
+	name     string
+	up       bool
+	loopback bool
+	ipv4     []string
+}
+
+// chooseLocalIP picks the LAN address shown in Help: the physical interface
+// of the default route first, then any physical interface with an IPv4.
+// Loopback aliases (a VPN may add one to lo0) and virtual interfaces such as
+// utun must never win.
+func chooseLocalIP(cands []lanCandidate, defaultIface string) string {
+	usable := func(c lanCandidate) bool {
+		return c.up && !c.loopback && physicalInterface(c.name) && len(c.ipv4) > 0
 	}
-	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
-			return ipn.IP.String()
+	for _, c := range cands {
+		if c.name == defaultIface && usable(c) {
+			return c.ipv4[0]
+		}
+	}
+	for _, c := range cands {
+		if usable(c) {
+			return c.ipv4[0]
 		}
 	}
 	return "—"
+}
+
+func physicalInterface(name string) bool {
+	for _, prefix := range []string{"lo", "utun", "gif", "stf", "awdl", "llw", "anpi"} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func localIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "—"
+	}
+	cands := make([]lanCandidate, 0, len(ifaces))
+	for _, iface := range ifaces {
+		c := lanCandidate{
+			name:     iface.Name,
+			up:       iface.Flags&net.FlagUp != 0,
+			loopback: iface.Flags&net.FlagLoopback != 0,
+		}
+		if addrs, err := iface.Addrs(); err == nil {
+			for _, a := range addrs {
+				if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && !ipn.IP.IsLoopback() {
+					c.ipv4 = append(c.ipv4, ipn.IP.String())
+				}
+			}
+		}
+		cands = append(cands, c)
+	}
+	return chooseLocalIP(cands, defaultRouteInterface())
+}
+
+func defaultRouteInterface() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	out, err := exec.Command("route", "-n", "get", "default").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "interface:"); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // --- label helpers ---

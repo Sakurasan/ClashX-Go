@@ -81,6 +81,39 @@ func TestPanelTabs(t *testing.T) {
 	}
 }
 
+// The Help IP must come from a physical LAN interface: a VPN alias on lo0
+// (172.30.210.8 here) or the TUN device must not win.
+func TestChooseLocalIP(t *testing.T) {
+	cands := []lanCandidate{
+		{name: "lo0", up: true, loopback: true, ipv4: []string{"172.30.210.8"}},
+		{name: "utun4", up: true, ipv4: []string{"198.18.0.1"}},
+		{name: "en0", up: true},
+		{name: "en1", up: true, ipv4: []string{"192.168.1.4"}},
+	}
+	if got := chooseLocalIP(cands, "en1"); got != "192.168.1.4" {
+		t.Errorf("default-route IP = %q, want 192.168.1.4", got)
+	}
+	if got := chooseLocalIP(cands, "utun4"); got != "192.168.1.4" {
+		t.Errorf("VPN default-route IP = %q, want the physical 192.168.1.4", got)
+	}
+	if got := chooseLocalIP(cands[:2], ""); got != "—" {
+		t.Errorf("virtual-only IP = %q, want —", got)
+	}
+}
+
+func TestPhysicalInterface(t *testing.T) {
+	for _, name := range []string{"en0", "en1", "bridge0"} {
+		if !physicalInterface(name) {
+			t.Errorf("%s should be physical", name)
+		}
+	}
+	for _, name := range []string{"lo0", "utun0", "utun4", "gif0", "stf0", "awdl0", "llw0", "anpi0"} {
+		if physicalInterface(name) {
+			t.Errorf("%s should be virtual", name)
+		}
+	}
+}
+
 // TestTrayMenu exercises the ClashX-style menu build and its in-place
 // refresh: selections and delays update items without a rebuild.
 func TestTrayMenu(t *testing.T) {
@@ -123,7 +156,7 @@ func TestTrayMenu(t *testing.T) {
 
 func TestAboutView(t *testing.T) {
 	tt := ui.NewTester(aboutView, 400, 460)
-	for _, want := range []string{"ClashX Go", "版本: 0.2.3", "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
+	for _, want := range []string{"ClashX Go", "版本: 0.2.4", "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
 		if !tt.HasText(want) {
 			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
 		}
