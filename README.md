@@ -74,7 +74,7 @@ needs no runtime download.
 
 - macOS 11 or later (Apple Silicon or Intel; build with
   `-platform darwin/universal` for one app that runs natively on both)
-- Go 1.27+ to build; the MyGo CLI is declared as a Go tool (`go tool mygo`)
+- Go 1.27.3+ to build; the MyGo CLI is declared as a Go tool (`go tool mygo`)
 - `curl` and `gunzip` to fetch the bundled cores at build time
 
 ## Install

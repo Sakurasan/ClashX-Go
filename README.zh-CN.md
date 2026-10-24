@@ -65,7 +65,7 @@
 
 - macOS 11 及以上（Apple Silicon 或 Intel；用 `-platform darwin/universal`
   可打出同时原生支持两者的通用应用）
-- 构建需要 Go 1.27+；MyGo CLI 已声明为 Go tool（`go tool mygo`）
+- 构建需要 Go 1.27.3+；MyGo CLI 已声明为 Go tool（`go tool mygo`）
 - 构建时拉取内核需要 `curl` 与 `gunzip`
 
 ## 安装
