@@ -154,9 +154,43 @@ func TestTrayMenu(t *testing.T) {
 	}
 }
 
+// Settings edited in the dashboard live only in the core until the app
+// adopts them; otherwise the next start reverts them and the menu lies.
+func TestAdoptRuntimeSettings(t *testing.T) {
+	a := testApp(t)
+	a.coreLAN = false
+	if a.adoptRuntimeSettings(core.State{Mode: "global", AllowLAN: true}) {
+		t.Fatal("unloaded state must not be adopted")
+	}
+	if a.settings.mode != "" || a.settings.allowLAN {
+		t.Fatalf("state adopted before config load: %+v", a.settings)
+	}
+
+	s := core.State{ConfigLoaded: true, Mode: "global", AllowLAN: true}
+	if !a.adoptRuntimeSettings(s) {
+		t.Fatal("runtime change not adopted")
+	}
+	if a.settings.mode != "global" || !a.settings.allowLAN {
+		t.Fatalf("settings = %+v", a.settings)
+	}
+	if a.adoptRuntimeSettings(s) {
+		t.Fatal("unchanged state should not rewrite settings")
+	}
+
+	// A LAN edit saved in the settings window is not applied until the
+	// restart, so the poll must leave it alone.
+	a.settings.allowLAN = false
+	if a.adoptRuntimeSettings(s) {
+		t.Fatal("pending LAN edit was reverted by an unchanged core")
+	}
+	if a.settings.allowLAN {
+		t.Fatal("pending LAN edit lost")
+	}
+}
+
 func TestAboutView(t *testing.T) {
 	tt := ui.NewTester(aboutView, 400, 460)
-	for _, want := range []string{"ClashX Go", "版本: 0.2.5", "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
+	for _, want := range []string{"ClashX Go", "版本: 0.2.6", "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
 		if !tt.HasText(want) {
 			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
 		}

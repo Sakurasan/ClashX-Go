@@ -43,6 +43,10 @@ type app struct {
 	// trayDark is the appearance of the menu bar, kept by the tray's
 	// OnAppearanceChange so the colored running icon stays legible.
 	trayDark bool
+	// coreLAN is the last allow-lan value read from the core. Runtime
+	// changes are adopted only when this value moves, so an edit that is
+	// saved but not yet applied (settings window) is not polled away.
+	coreLAN bool
 
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
 	// against a still-finishing operation. reloadMu serialises background
@@ -91,6 +95,7 @@ func (a *app) ready() {
 		log.Fatal("core dir: ", err)
 	}
 	a.settings = loadSettings(dir)
+	a.coreLAN = a.settings.allowLAN
 	uiLang = resolveLang(a.settings.lang)
 	a.activeAPI = parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
 	log.Printf("启动：tun=%t systemProxy=%t profile=%q config=%q",
@@ -289,7 +294,33 @@ func (a *app) onState(s core.State) {
 			a.tray.SetToolTip("ClashX Go — " + status)
 		}
 		a.menu.refresh(s)
+		if a.adoptRuntimeSettings(s) {
+			log.Printf("同步内核设置: mode=%s allowLAN=%t", s.Mode, s.AllowLAN)
+			saveSettings(coreDir(), a.settings)
+		}
 	})
+}
+
+// adoptRuntimeSettings copies the settings the dashboard can change at
+// runtime into the app settings, so a restart doesn't revert them and the
+// tray follows the core instead of the app's stale intent.
+func (a *app) adoptRuntimeSettings(s core.State) bool {
+	if a.settings == nil || !s.ConfigLoaded {
+		return false
+	}
+	changed := false
+	if s.AllowLAN != a.coreLAN {
+		a.coreLAN = s.AllowLAN
+		if a.settings.allowLAN != s.AllowLAN {
+			a.settings.allowLAN = s.AllowLAN
+			changed = true
+		}
+	}
+	if s.Mode != "" && a.settings.mode != s.Mode {
+		a.settings.mode = s.Mode
+		changed = true
+	}
+	return changed
 }
 
 func (a *app) startCore() { a.startCoreReport(true) }
@@ -576,6 +607,9 @@ func (a *app) settingsConfig() core.Config {
 		cfg.ControllerSocket = filepath.Join(coreDir(), "run", "controller.sock")
 		cfg.Secret = s.secret
 		cfg.AllowLAN = s.allowLAN
+		if s.mode == "rule" || s.mode == "global" || s.mode == "direct" {
+			cfg.Mode = s.mode
+		}
 		cfg.TUN = s.tun
 		cfg.IPv6 = s.ipv6
 		cfg.BenchmarkURL = s.benchmarkURL

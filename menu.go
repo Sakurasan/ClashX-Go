@@ -141,7 +141,7 @@ func (m *trayMenu) build(s core.State) {
 	m.lanItem = &mygo.MenuItem{
 		Label:   T("允许局域网连接"),
 		Type:    mygo.MenuItemCheckbox,
-		Checked: st.allowLAN,
+		Checked: s.AllowLAN,
 	}
 	m.lanItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setLANToggle(it) }
 	items = append(items, m.loginItem, m.speedItem, m.lanItem, mygo.Separator())
@@ -214,6 +214,11 @@ func (m *trayMenu) refresh(s core.State) {
 		m.coreRun = s.Running
 		m.speedTitle = "" // force the speed bitmap to redraw with the new state
 		a.updateTrayIcon(s.Running)
+	}
+	if m.lanItem != nil {
+		// The dashboard can toggle allow-lan through the API; the menu
+		// follows the core, not the app's older intent.
+		m.lanItem.SetChecked(s.AllowLAN)
 	}
 	for _, g := range s.Groups {
 		ge := m.findGroup(g.Name)

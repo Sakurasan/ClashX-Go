@@ -13,10 +13,14 @@ import (
 type State struct {
 	Running  bool
 	Mode     string
-	Selected map[string]string // group name -> chosen member
-	Groups   []*GroupView
-	Traffic  Traffic
-	Level    string // core log-level, refreshed by the poll loop
+	AllowLAN bool
+	// ConfigLoaded is set once /configs has been read, so the app does
+	// not mistake the zero State for a runtime setting change.
+	ConfigLoaded bool
+	Selected     map[string]string // group name -> chosen member
+	Groups       []*GroupView
+	Traffic      Traffic
+	Level        string // core log-level, refreshed by the poll loop
 
 	// Subscription status, refreshed with the poll loop. SubProxies is the
 	// node count of the downloaded subscription (0 when none). SubInfo is
@@ -209,7 +213,7 @@ func (c *Controller) pollLoop(ctx context.Context) {
 			return
 		}
 		fails = 0
-		c.applyProxies(cfg.Mode, proxies)
+		c.applyProxies(cfg.Mode, cfg.AllowLAN, proxies)
 		refreshSub()
 	}
 	refresh()
@@ -439,7 +443,7 @@ func (c *Controller) RefreshSubscription(ctx context.Context) (int, string, erro
 // applyProxies turns a /proxies snapshot into state: groups are ordered by
 // the config file, seeded from mihomo's history for each current member and
 // topped up from the delay cache so tested nodes survive between polls.
-func (c *Controller) applyProxies(mode string, proxies *Proxies) {
+func (c *Controller) applyProxies(mode string, allowLAN bool, proxies *Proxies) {
 	groups := []*GroupView{}
 	sel := map[string]string{}
 	for name, p := range proxies.ProxyGroups() {
@@ -464,6 +468,8 @@ func (c *Controller) applyProxies(mode string, proxies *Proxies) {
 		}
 		s.Running = true
 		s.Mode = mode
+		s.AllowLAN = allowLAN
+		s.ConfigLoaded = true
 		s.Selected = sel
 		s.Groups = groups
 	})

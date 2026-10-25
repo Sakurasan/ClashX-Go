@@ -87,7 +87,7 @@ var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*
 
 // runningOverrideKeys are top-level keys the app owns: the settings panel
 // and menu toggles win over whatever the user's profile declares.
-var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "tun", "external-ui", "find-process-mode", "external-controller-unix"}
+var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "mode", "tun", "external-ui", "find-process-mode", "external-controller-unix"}
 
 // writeRunningConfig copies a user profile to dest, stripping its
 // app-managed keys (including whole mapping blocks like tun:) and
@@ -101,6 +101,7 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "mixed-port: %d\n", cfg.MixedPort)
 	fmt.Fprintf(&b, "allow-lan: %t\n", cfg.AllowLAN)
+	fmt.Fprintf(&b, "mode: %s\n", cfg.Mode)
 	if cfg.ControllerSocket != "" {
 		fmt.Fprintf(&b, "external-controller-unix: %q\n", cfg.ControllerSocket)
 	}

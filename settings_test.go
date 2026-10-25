@@ -24,6 +24,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	s.startAtLogin = true
 	s.tunDNS = "8.8.8.8"
 	s.lang = "en"
+	s.mode = "global"
 	s.appRules = []appRoutingRule{{Name: "Telegram", Process: "Telegram", Path: "/Applications/Telegram.app", Target: "proxy"}}
 	saveSettings(dir, s)
 
@@ -51,6 +52,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if got.lang != "en" {
 		t.Errorf("lang = %q, want en", got.lang)
+	}
+	if got.mode != "global" {
+		t.Errorf("mode = %q, want global", got.mode)
 	}
 	if len(got.appRules) != 1 || got.appRules[0].Process != "Telegram" ||
 		got.appRules[0].Path != "/Applications/Telegram.app" || got.appRules[0].Target != "proxy" {

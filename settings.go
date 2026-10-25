@@ -84,6 +84,9 @@ type settings struct {
 	// lang is the interface language: "", "zh" or "en"; empty follows the
 	// system.
 	lang string
+	// mode is the last outbound mode seen from the core, persisted so a
+	// change made in the dashboard survives a restart.
+	mode string
 	// proxyBackup is the user's own system-proxy config captured before we
 	// overwrote it; restoring it beats switching ours off.
 	proxyBackup *systemProxyBackup
@@ -117,6 +120,7 @@ type settingsJSON struct {
 	Selections     []savedSelection      `json:"selections,omitempty"`
 	Shortcuts      map[string]string     `json:"shortcuts,omitempty"`
 	Lang           string                `json:"lang,omitempty"`
+	Mode           string                `json:"mode,omitempty"`
 	ProxyBackup    *systemProxyBackup    `json:"proxyBackup,omitempty"`
 	// Legacy single-subscription field, migrated into Profiles on load.
 	SubscriptionURL string `json:"subscriptionURL,omitempty"`
@@ -128,6 +132,7 @@ func loadSettings(dir string) *settings {
 		mixedPort:      "7890",
 		controller:     "9090",
 		showTraffic:    true,
+		mode:           "rule",
 		autoUpdate:     true,
 		updateInterval: 360,
 		benchmarkURL:   defaultBenchmarkURL,
@@ -181,6 +186,9 @@ func loadSettings(dir string) *settings {
 		s.shortcuts = w.Shortcuts
 	}
 	s.lang = w.Lang
+	if w.Mode != "" {
+		s.mode = w.Mode
+	}
 	s.proxyBackup = w.ProxyBackup
 	if w.ShowTraffic != nil {
 		s.showTraffic = *w.ShowTraffic
@@ -245,6 +253,7 @@ func saveSettings(dir string, s *settings) {
 		Selections:     s.selections,
 		Shortcuts:      s.shortcuts,
 		Lang:           s.lang,
+		Mode:           s.mode,
 		ProxyBackup:    s.proxyBackup,
 		ShowTraffic:    &s.showTraffic,
 	}
