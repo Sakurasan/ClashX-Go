@@ -231,7 +231,7 @@ func TestAdoptRuntimeSettings(t *testing.T) {
 
 func TestAboutView(t *testing.T) {
 	tt := ui.NewTester(aboutView, 400, 460)
-	for _, want := range []string{"ClashX Go", "版本: 0.2.6", "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
+	for _, want := range []string{"ClashX Go", "版本: " + appVersion, "Meta Core " + core.CoreVersion, "mihomo", "AGPL-3.0", "打开配置文件夹"} {
 		if !tt.HasText(want) {
 			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
 		}
