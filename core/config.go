@@ -3,8 +3,10 @@ package core
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,9 +33,10 @@ type Config struct {
 	ConfigPath string `json:"config-path"`
 	// SubscriptionURL, when set, activates the downloaded subscription. A
 	// full Clash config (one that declares proxy-groups) is used as-is with
-	// the app-managed keys overlaid, so the provider's own groups, rules
-	// and DNS survive; a provider-style node list gets a generated config
-	// with a file provider pointing at the local copy.
+	// the app-managed keys overlaid, so the provider's own groups and rules
+	// survive; DNS and TUN are app-owned so TUN mode always gets fake-ip
+	// and a working resolver. A provider-style node list gets a generated
+	// config with a file provider pointing at the local copy.
 	SubscriptionURL string `json:"subscription-url"`
 	// SubscriptionFile overrides the downloaded-subscription file name
 	// (default SubscriptionFile). Managed profiles each keep their own.
@@ -48,6 +51,11 @@ type Config struct {
 	TUN bool `json:"tun"`
 	// IPv6 enables IPv6 in the core runtime config.
 	IPv6 bool `json:"ipv6"`
+	// InterfaceName pins the outbound network interface (e.g. en1). TUN
+	// cannot rely on auto detection: with auto-route on, mihomo's own route
+	// lookup resolves to the tun device and direct dials (DNS included)
+	// fail with "interface not found" right after start.
+	InterfaceName string `json:"interface-name,omitempty"`
 	// BenchmarkURL is the URL used for per-node latency tests.
 	BenchmarkURL string `json:"benchmark-url"`
 	// ProcessRules route selected applications before the profile's own
@@ -85,9 +93,60 @@ func (c Config) subFile() string {
 // e.g. `- {name: 节点选择, type: select, …}`.
 var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*,`)
 
+// DefaultInterface returns the interface carrying the default route, or ""
+// when it cannot be determined. The app re-checks it so a network switch
+// (Wi-Fi to Ethernet, hotspots) can re-pin the outbound interface.
+func DefaultInterface() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	out, err := exec.Command("/sbin/route", "-n", "get", "default").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if key, val, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && strings.TrimSpace(key) == "interface" {
+			return strings.TrimSpace(val)
+		}
+	}
+	return ""
+}
+
+// writeInterfaceName pins outbound sockets to the physical interface. It is
+// paired with tun.auto-detect-interface: false: under auto-route the core's
+// own route lookup points at the tun device, so detection either fails or
+// loops traffic back into the tunnel.
+func (c Config) writeInterfaceName(b *strings.Builder) {
+	if c.InterfaceName != "" {
+		fmt.Fprintf(b, "interface-name: %s\n", c.InterfaceName)
+	}
+}
+
+// writeDNSSection emits the app-managed DNS block: fake-ip so proxied
+// domains reach the core by name (rules and remote resolution keep
+// working), with plain CN resolvers only. Foreign DoH/DoT fallbacks are
+// deliberately absent — on many networks they are unreachable or poisoned
+// and every foreign lookup first waits for their timeouts.
+func (c Config) writeDNSSection(b *strings.Builder) {
+	b.WriteString("dns:\n  enable: true\n  listen: 127.0.0.1:1053\n  enhanced-mode: fake-ip\n")
+	fmt.Fprintf(b, "  fake-ip-range: 198.18.0.1/16\n  ipv6: %t\n", c.IPv6)
+	b.WriteString("  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" +
+		"  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" +
+		"  proxy-server-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
+}
+
+// writeTunSection emits the TUN block. auto-route stays on; the outbound
+// interface is pinned when known so the core never dials out through its
+// own tun device.
+func (c Config) writeTunSection(b *strings.Builder) {
+	fmt.Fprintf(b, "tun:\n  enable: %t\n  stack: system\n  auto-route: true\n", c.TUN)
+	fmt.Fprintf(b, "  auto-detect-interface: %t\n", c.InterfaceName == "")
+	b.WriteString("  strict-route: false\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n")
+}
+
 // runningOverrideKeys are top-level keys the app owns: the settings panel
 // and menu toggles win over whatever the user's profile declares.
-var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "mode", "tun", "external-ui", "find-process-mode", "external-controller-unix"}
+var runningOverrideKeys = []string{"mixed-port", "port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "mode", "tun", "dns", "ipv6", "interface-name", "external-ui", "find-process-mode", "external-controller-unix"}
 
 // writeRunningConfig copies a user profile to dest, stripping its
 // app-managed keys (including whole mapping blocks like tun:) and
@@ -99,9 +158,11 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 		return "", err
 	}
 	var b strings.Builder
+	cfg.writeInterfaceName(&b)
 	fmt.Fprintf(&b, "mixed-port: %d\n", cfg.MixedPort)
 	fmt.Fprintf(&b, "allow-lan: %t\n", cfg.AllowLAN)
 	fmt.Fprintf(&b, "mode: %s\n", cfg.Mode)
+	fmt.Fprintf(&b, "ipv6: %t\n", cfg.IPv6)
 	if cfg.ControllerSocket != "" {
 		fmt.Fprintf(&b, "external-controller-unix: %q\n", cfg.ControllerSocket)
 	}
@@ -111,8 +172,8 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 	if cfg.ExternalUI != "" {
 		fmt.Fprintf(&b, "external-ui: %s\n", cfg.ExternalUI)
 	}
-	fmt.Fprintf(&b, "tun:\n  enable: %t\n  stack: system\n"+
-		"  strict-route: false\n  dns-hijack:\n    - any:53\n", cfg.TUN)
+	cfg.writeDNSSection(&b)
+	cfg.writeTunSection(&b)
 	var body strings.Builder
 	skipBlock := false
 	for _, line := range strings.Split(string(data), "\n") {
@@ -264,7 +325,7 @@ func injectProcessRules(data string, rules []string, catchAll string) string {
 
 // fullProfile reports whether path is a complete Clash config (it declares
 // proxy-groups) rather than a provider-style node list. Such subscriptions
-// keep their own groups, rules and DNS instead of the generated fallback.
+// keep their own groups and rules instead of the generated fallback.
 func fullProfile(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -425,6 +486,7 @@ func writeRuleBlock(b *strings.Builder, rules []string, catchAll string) {
 
 // writeBase renders the app-managed header: endpoints, ports, DNS and TUN.
 func (c Config) writeBase(b *strings.Builder) {
+	c.writeInterfaceName(b)
 	fmt.Fprintf(b, "mixed-port: %d\n", c.MixedPort)
 	fmt.Fprintf(b, "external-controller: 127.0.0.1:%d\n", c.ControllerPort)
 	if c.Secret != "" {
@@ -442,10 +504,8 @@ func (c Config) writeBase(b *strings.Builder) {
 	// Resolve the owning process only when a PROCESS-* rule exists.
 	b.WriteString("find-process-mode: strict\n")
 	b.WriteString("log-level: info\n")
-	b.WriteString("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n" +
-		"  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")
-	fmt.Fprintf(b, "tun:\n  enable: %t\n  stack: system\n"+
-		"  strict-route: false\n  dns-hijack:\n    - any:53\n", c.TUN)
+	c.writeDNSSection(b)
+	c.writeTunSection(b)
 }
 
 // WriteBootstrapYAML writes the minimal config the core boots with: just

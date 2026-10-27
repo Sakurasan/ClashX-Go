@@ -31,10 +31,14 @@ needs no runtime download.
 - System proxy without a privileged helper, with the user's previous proxy
   configuration snapshotted and restored on disable/quit
 - TUN mode: a one-time administrator authorization installs a setuid copy of
-  the core, after which toggling TUN is a passwordless hot API call
+  the core, after which toggling TUN is a passwordless hot API call; the
+  outbound interface is pinned (`interface-name`) so the core never dials
+  through its own tun, and it follows Wi-Fi/Ethernet changes automatically
 - Tun DNS: optionally point system DNS at a chosen address while TUN is on
-  (originals restored when TUN turns off or the app quits); empty uses local
-  DNS
+  (originals restored when TUN turns off or the app quits); empty lets the
+  TUN's DNS hijack answer. When Tailscale's DNS takeover is detected, the
+  menu bar offers one-click fixes: switch to system proxy (they coexist) or
+  disable Tailscale's DNS takeover
 - Per-app routing: pick `.app` bundles in the 分流 tab to force them direct or
   through the proxy before domain rules (PROCESS-NAME plus a bundle-path
   regex, so helper processes match too); works with TUN and system proxy
@@ -45,8 +49,9 @@ needs no runtime download.
 
 - Managed subscriptions (add / update / delete, rename by provider title,
   quota and expiry shown in the menu) and local config files
-- Subscriptions that are full Clash configs keep their **own policy groups,
-  rules and DNS**; provider-style node lists get a generated config
+- Subscriptions that are full Clash configs keep their **own policy groups
+  and rules**; DNS and TUN stay app-managed (fake-ip + CN resolvers) so TUN
+  mode always works; provider-style node lists get a generated config
 - Restart-free live reload; edits to the active config file are picked up
   automatically; remembered node selections are replayed after each reload
 

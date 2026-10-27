@@ -34,6 +34,7 @@ type trayMenu struct {
 	coreRun    bool
 	sysProxy   *mygo.MenuItem
 	tunItem    *mygo.MenuItem
+	tsItem     *mygo.MenuItem // Tailscale DNS-takeover submenu, when detected
 	loginItem  *mygo.MenuItem
 	speedItem  *mygo.MenuItem
 	lanItem    *mygo.MenuItem
@@ -120,7 +121,22 @@ func (m *trayMenu) build(s core.State) {
 	}
 	m.tunItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setTUNToggle(it) }
 	copyCmd := &mygo.MenuItem{Label: T("复制终端代理命令"), Accelerator: "Cmd+C", Click: func(*mygo.MenuItem, *mygo.Window) { a.copyProxyCommand() }}
-	items = append(items, m.sysProxy, m.tunItem, copyCmd, mygo.Separator())
+	items = append(items, m.sysProxy, m.tunItem)
+	// Tailscale's resolver answers over its own utun, so DNS never reaches
+	// the TUN hijack; offer the two ways out. The item stays in the menu
+	// but hidden while it does not apply, so the state poll can show or
+	// drop it in place instead of a rebuild.
+	m.tsItem = &mygo.MenuItem{
+		Label:  T("Tailscale 接管了 DNS"),
+		Hidden: !(a.tsMagicDNS && st.tun),
+		Submenu: []*mygo.MenuItem{
+			{Label: T("其解析器绕过 TUN，域名规则与 fake-ip 失效"), Disabled: true},
+			{Label: T("改用系统代理（与 Tailscale 共存）"), Click: func(*mygo.MenuItem, *mygo.Window) { go a.switchToSystemProxy() }},
+			{Label: T("关闭 Tailscale 的 DNS 接管"), Click: func(*mygo.MenuItem, *mygo.Window) { go a.disableTailscaleDNS() }},
+		},
+	}
+	items = append(items, m.tsItem)
+	items = append(items, copyCmd, mygo.Separator())
 
 	m.loginItem = &mygo.MenuItem{
 		Label:   T("开机启动"),
@@ -219,6 +235,18 @@ func (m *trayMenu) refresh(s core.State) {
 		// The dashboard can toggle allow-lan through the API; the menu
 		// follows the core, not the app's older intent.
 		m.lanItem.SetChecked(s.AllowLAN)
+	}
+	// App-owned toggles change outside the menu too (the Tailscale
+	// escape hatch, shortcuts, the panel); sync them on every poll so
+	// the checkboxes never lie.
+	if m.sysProxy != nil {
+		m.sysProxy.SetChecked(a.settings.systemProxy)
+	}
+	if m.tunItem != nil {
+		m.tunItem.SetChecked(a.settings.tun)
+	}
+	if m.tsItem != nil {
+		m.tsItem.SetVisible(a.tsMagicDNS && a.settings.tun)
 	}
 	for _, g := range s.Groups {
 		ge := m.findGroup(g.Name)
@@ -351,6 +379,9 @@ func (a *app) setSystemProxy(on bool) {
 			}
 			a.settings.systemProxy = true
 			saveSettings(coreDir(), a.settings)
+			if a.menu != nil && a.menu.sysProxy != nil {
+				a.menu.sysProxy.SetChecked(true)
+			}
 			a.refreshTrayIcon()
 			return
 		}
@@ -362,8 +393,21 @@ func (a *app) setSystemProxy(on bool) {
 		a.settings.systemProxy = false
 		a.settings.proxyBackup = nil
 		saveSettings(coreDir(), a.settings)
+		if a.menu != nil && a.menu.sysProxy != nil {
+			a.menu.sysProxy.SetChecked(false)
+		}
 		a.refreshTrayIcon()
 	}()
+}
+
+// switchToSystemProxy is the Tailscale escape hatch: MagicDNS resolves
+// domains outside the tunnel, so while it is on, the system proxy (which
+// forwards domain names to the node) is the mode that works alongside it.
+func (a *app) switchToSystemProxy() {
+	log.Printf("Tailscale DNS 接管：切换到系统代理模式")
+	a.setTUN(false)
+	a.setSystemProxy(true)
+	a.showToast(T("已切换到系统代理"), T("系统代理与 Tailscale 互不干扰；需要 TUN 时先关闭 Tailscale 的 DNS 接管。"))
 }
 
 func (a *app) setLoginToggle(it *mygo.MenuItem) {
@@ -414,6 +458,12 @@ func (a *app) setTUN(on bool) {
 	a.settings.tun = on
 	saveSettings(coreDir(), a.settings)
 	a.refreshTrayIcon()
+	if a.menu != nil && a.menu.tunItem != nil {
+		a.menu.tunItem.SetChecked(on)
+	}
+	// The Tailscale warning only exists while TUN is on; keep the cached
+	// state in step so the next menu open shows (or drops) it.
+	go a.refreshTailscaleState()
 	if !on {
 		// Restore the user's DNS right away; a TUN that is still draining
 		// keeps hijacking its own queries through the interface.

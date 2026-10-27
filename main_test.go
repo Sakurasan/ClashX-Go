@@ -152,6 +152,47 @@ func TestTrayMenu(t *testing.T) {
 	if got := ge.item.Label; got != "PROXY  (US)" {
 		t.Errorf("group label = %q", got)
 	}
+
+	// The Tailscale takeover item appears only while TUN is on and the
+	// MagicDNS detection says the resolver bypasses the tunnel. The item
+	// stays in the menu and toggles visibility, so the poll can reveal it
+	// without a rebuild.
+	a.settings.tun = true
+	a.tsMagicDNS = true
+	m.build(s)
+	if !m.tsItem.IsVisible() {
+		t.Error("Tailscale takeover item missing while TUN is on")
+	}
+	a.settings.tun = false
+	m.build(s)
+	if m.tsItem.IsVisible() {
+		t.Error("Tailscale takeover item shown without TUN")
+	}
+	a.settings.tun = true
+	a.tsMagicDNS = false
+	m.build(s)
+	if m.tsItem.IsVisible() {
+		t.Error("Tailscale takeover item shown without detection")
+	}
+
+	// A switch to system proxy happens outside the menu (the Tailscale
+	// escape hatch, shortcuts, the panel): the next state poll must sync
+	// the checkboxes and hide the takeover item.
+	a.settings.tun = true
+	a.tsMagicDNS = true
+	m.build(s)
+	a.settings.tun = false
+	a.settings.systemProxy = true
+	m.refresh(s2)
+	if m.tunItem.IsChecked() {
+		t.Error("tun checkbox still checked after switching to system proxy")
+	}
+	if !m.sysProxy.IsChecked() {
+		t.Error("system proxy checkbox not checked after switching")
+	}
+	if m.tsItem.IsVisible() {
+		t.Error("Tailscale takeover item still visible after TUN off")
+	}
 }
 
 // Settings edited in the dashboard live only in the core until the app

@@ -271,7 +271,7 @@ func (p *panelApp) metaPane(c *ui.Context) {
 		settingsGroup(c, T("TUN"), func() {
 			settingsRow(c, T("Tun DNS"), func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.TextInput(c, &a.settings.tunDNS).Width(150).Placeholder("8.8.8.8").
+					ui.TextInput(c, &a.settings.tunDNS).Width(150).Placeholder("223.5.5.5").
 						OnChange(func() { saveSettings(coreDir(), a.settings) }).
 						OnSubmit(func() {
 							saveSettings(coreDir(), a.settings)
@@ -283,7 +283,7 @@ func (p *panelApp) metaPane(c *ui.Context) {
 					})
 				})
 			})
-			ui.Text(c, T("留空使用本地 DNS（推荐）；填写后开启 TUN 时会把系统 DNS 指向该地址。")).
+			ui.Text(c, T("留空时由 TUN 劫持系统 DNS（推荐，配合 fake-ip 生效）；填写后会在开启 TUN 时把系统 DNS 指向该地址。若同时运行 Tailscale 等接管 DNS 的 VPN，请关闭其 DNS 接管。")).
 				FontSize(11).TextColor(t.TextMuted)
 		})
 		settingsGroup(c, T("内核"), func() {

@@ -47,6 +47,9 @@ type app struct {
 	// changes are adopted only when this value moves, so an edit that is
 	// saved but not yet applied (settings window) is not polled away.
 	coreLAN bool
+	// tsMagicDNS caches the Tailscale DNS-takeover detection the tray menu
+	// surfaces; the network watch loop and TUN toggles keep it fresh.
+	tsMagicDNS bool
 
 	// coreOp serialises start/stop/restart so menu clicks cannot stack up
 	// against a still-finishing operation. reloadMu serialises background
@@ -100,6 +103,9 @@ func (a *app) ready() {
 	a.activeAPI = parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
 	log.Printf("启动：tun=%t systemProxy=%t profile=%q config=%q",
 		a.settings.tun, a.settings.systemProxy, a.settings.activeProfile, a.settings.configPath)
+	// Before the first menu build: the 10s watch loop would otherwise leave
+	// the Tailscale item missing for the first few seconds after launch.
+	a.refreshTailscaleState()
 	// Reflect the real system login-item state so the switch shows the
 	// truth even if the user toggled it in System Settings.
 	a.settings.startAtLogin = mygo.App.OpenAtLogin()
@@ -133,6 +139,9 @@ func (a *app) ready() {
 		// MyGo does not expose. Leave the item menu unset so clicks reach
 		// OnClick: rebuild from the freshest state, then pop it up.
 		a.tray.OnClick(func() {
+			// Re-check Tailscale so a mid-run takeover/toggle is reflected
+			// immediately, not up to 10s later (no-op when TUN is off).
+			a.refreshTailscaleState()
 			a.menu.rebuild()
 			a.tray.PopUpMenu()
 		})
@@ -193,7 +202,33 @@ func (a *app) ready() {
 	go a.subscriptionNoticeLoop()
 	go a.watchConfigSource()
 	go a.ssidSuspendLoop()
+	go a.networkWatchLoop()
 	go a.connectionsLoop()
+}
+
+// networkWatchLoop keeps the app in step with the machine's network state:
+// it re-pins the outbound interface when the default route moves (Wi-Fi to
+// Ethernet, hotspots) — the runtime config disables tun.auto-detect-interface
+// so nothing else follows network changes — and refreshes the Tailscale
+// DNS-takeover state the tray menu surfaces.
+func (a *app) networkWatchLoop() {
+	for {
+		time.Sleep(10 * time.Second)
+		if a.quitting {
+			return
+		}
+		if a.ctrl.State().Running {
+			current := a.ctrl.CurrentConfig().InterfaceName
+			next := core.DefaultInterface()
+			if next != "" && next != current {
+				log.Printf("默认网络接口变更 %q -> %q，重载核心配置", current, next)
+				if err := a.applyConfig(a.settingsConfig()); err != nil {
+					log.Printf("接口变更后重载失败: %v", err)
+				}
+			}
+		}
+		a.refreshTailscaleState()
+	}
 }
 
 // ssidSuspendLoop pauses the system proxy and TUN while the default route is
@@ -601,6 +636,7 @@ func (a *app) chooseControllerPort() {
 // settingsConfig builds the controller config from the app settings.
 func (a *app) settingsConfig() core.Config {
 	cfg := core.DefaultConfig()
+	cfg.InterfaceName = core.DefaultInterface()
 	if s := a.settings; s != nil {
 		cfg.MixedPort = parsePort(s.mixedPort, cfg.MixedPort)
 		cfg.ControllerPort = a.apiPort()

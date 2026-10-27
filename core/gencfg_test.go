@@ -81,9 +81,79 @@ func TestWriteYAMLTunAndLAN(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, want := range []string{"tun:\n  enable: true", "stack: system", "any:53", "allow-lan: true"} {
+	for _, want := range []string{"tun:\n  enable: true", "stack: system", "auto-route: true", "auto-detect-interface: true", "any:53", "allow-lan: true"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in config:\n%s", want, s)
+		}
+	}
+}
+
+// A pinned interface turns auto detection off: under auto-route the core's
+// own route lookup points at the tun device, so detection fails with
+// "interface not found" and direct DNS never reaches the resolvers.
+func TestWriteYAMLInterfacePinsTun(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.TUN = true
+	cfg.InterfaceName = "en1"
+	path, err := cfg.WriteYAML(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(mustRead(t, path))
+	for _, want := range []string{"interface-name: en1", "auto-route: true", "auto-detect-interface: false"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in config:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "auto-detect-interface: true") {
+		t.Errorf("auto detection must be off when the interface is pinned:\n%s", s)
+	}
+}
+
+// Full profiles get the app-managed DNS and TUN settings: the provider's
+// foreign DoH fallbacks are exactly what times out (or gets poisoned) on a
+// TUN setup, and the profile's interface must not win either.
+func TestWriteRunningConfigOverridesDNSAndInterface(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "profile.yaml")
+	dest := filepath.Join(dir, "running.yaml")
+	profile := "interface-name: en0\n" +
+		"ipv6: true\n" +
+		"dns:\n  enable: true\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n" +
+		"  nameserver: ['https://doh.pub/dns-query']\n" +
+		"  fallback: ['https://doh.dns.sb/dns-query', 'tls://8.8.4.4:853']\n" +
+		"  fallback-filter: {geoip: true}\n" +
+		"tun:\n  enable: true\n  stack: mixed\n  auto-detect-interface: true\n" +
+		"proxy-groups:\n  - name: A\n    type: select\n" +
+		"rules:\n  - MATCH,A\n"
+	if err := os.WriteFile(src, []byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.TUN = true
+	cfg.InterfaceName = "en1"
+	if _, err := writeRunningConfig(src, dest, cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := string(mustRead(t, dest))
+	for _, want := range []string{
+		"interface-name: en1",
+		"ipv6: false",
+		"enhanced-mode: fake-ip",
+		"fake-ip-range: 198.18.0.1/16",
+		"223.5.5.5",
+		"119.29.29.29",
+		"auto-route: true",
+		"auto-detect-interface: false",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in overlaid config:\n%s", want, s)
+		}
+	}
+	for _, bad := range []string{"interface-name: en0", "ipv6: true", "doh.dns.sb", "8.8.4.4", "auto-detect-interface: true", "stack: mixed"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("profile value %q survived the overlay:\n%s", bad, s)
 		}
 	}
 }

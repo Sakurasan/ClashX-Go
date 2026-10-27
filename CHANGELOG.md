@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.7
+
+TUN 出口修复与 Tailscale 共存。
+
+- 修复 TUN 模式下无法上网：出站流量固定到默认路由的物理网卡，并禁用内核的
+  自动网卡检测（auto-route 下它会指向自己的 tun 设备）；网络切换（Wi-Fi ↔
+  有线、热点）后约 10 秒内自动重新绑定
+- 应用统一托管运行配置的 dns / ipv6 / interface-name：完整订阅自带的 DNS
+  不再覆盖 App 设置；DNS 改为 fake-ip + 国内纯解析，去掉不可达的境外 DoH
+  回退，TUN 下域名规则与 fake-ip 恢复生效
+- 新增 Tailscale 共存检测：MagicDNS 接管系统 DNS 时托盘菜单提示，并提供两个
+  一键修复——关闭 Tailscale 的 DNS 接管（绕过其 CLI 在 GUI 应用内误入 GUI
+  模式导致失败的 bug，tailscale#16063），或改用系统代理与 Tailscale 完全共存
+- 托盘菜单的「Tun 模式」「设置为系统代理」勾选实时同步，切换后不再显示旧
+  状态；Tailscale 提示项随状态原地显隐
+- 诊断信息新增默认网卡与 Tailscale DNS 状态
+
 ## 0.2.6
 
 - 在仪表盘修改「允许局域网连接」或出站模式后，重启不再恢复旧值，托盘菜单的

@@ -60,14 +60,16 @@ func diagSummary(a *app) string {
 	fmt.Fprintf(&b, "ClashX Go %s (core %s)\n", appVersion, core.CoreVersion)
 	fmt.Fprintf(&b, "time: %s\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "os: %s/%s, macOS %s\n", runtime.GOOS, runtime.GOARCH, strings.TrimSpace(cmdOut("sw_vers", "-productVersion")))
+	fmt.Fprintf(&b, "default interface: %s\n", core.DefaultInterface())
 	fmt.Fprintf(&b, "running: %t, mode: %s, groups: %d\n", st.Running, st.Mode, len(st.Groups))
 	fmt.Fprintf(&b, "tun: %t, systemProxy: %t, allowLAN: %t, ipv6: %t\n",
 		s.tun, s.systemProxy, s.allowLAN, s.ipv6)
 	tunDNS := s.tunDNS
 	if tunDNS == "" {
-		tunDNS = "local"
+		tunDNS = "hijack"
 	}
-	fmt.Fprintf(&b, "tun DNS: %s (hijacked: %t)\n", tunDNS, dnsBackupExists())
+	fmt.Fprintf(&b, "tun DNS: %s (system DNS overridden: %t)\n", tunDNS, dnsBackupExists())
+	fmt.Fprintf(&b, "tailscale DNS: %t\n", tailscaleMagicDNS())
 	fmt.Fprintf(&b, "app routing rules: %d\n", len(s.appRules))
 	fmt.Fprintf(&b, "ports: mixed %d, controller %d\n", a.mixedPort(), a.apiPort())
 	fmt.Fprintf(&b, "secret: %s\n", map[bool]string{true: "set", false: "empty"}[s.secret != ""])
@@ -85,6 +87,8 @@ func diagSummary(a *app) string {
 	b.WriteString(cmdOut("lsof", "-nP", "-iTCP:7890", "-iTCP:9090", "-sTCP:LISTEN"))
 	b.WriteString("\n\n== system proxy\n")
 	b.WriteString(cmdOut("scutil", "--proxy"))
+	b.WriteString("\n\n== system DNS\n")
+	b.WriteString(cmdOut("scutil", "--dns"))
 	b.WriteString("\n\n== recent TUN log\n")
 	for _, line := range strings.Split(tailString(filepath.Join(coreDir(), "core.log"), 256<<10), "\n") {
 		if strings.Contains(line, "TUN") {
