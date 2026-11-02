@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -284,6 +285,16 @@ func (p *panelApp) metaPane(c *ui.Context) {
 				})
 			})
 			ui.Text(c, T("留空时由 TUN 劫持系统 DNS（推荐，配合 fake-ip 生效）；填写后会在开启 TUN 时把系统 DNS 指向该地址。若同时运行 Tailscale 等接管 DNS 的 VPN，请关闭其 DNS 接管。")).
+				FontSize(11).TextColor(t.TextMuted)
+			settingsSwitch(c, T("屏蔽 QUIC（UDP 443）"), &a.settings.blockQUIC, func() {
+				saveSettings(coreDir(), a.settings)
+				go func() {
+					if err := a.applyConfig(a.settingsConfig()); err != nil {
+						log.Printf("block QUIC: %v", err)
+					}
+				}()
+			})
+			ui.Text(c, T("TUN 下拒绝 QUIC，客户端会立刻回落到可用的 TCP。订阅用明文 DNS 解析代理域名会拿到污染地址，QUIC 因此黑洞，表现为 YouTube 等视频一直转圈；需要 QUIC 时关掉本开关。")).
 				FontSize(11).TextColor(t.TextMuted)
 		})
 		settingsGroup(c, T("内核"), func() {

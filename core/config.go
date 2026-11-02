@@ -49,6 +49,10 @@ type Config struct {
 	// TUN enables the core's TUN interface. Opening the device needs
 	// administrator rights; without them the core exits at startup.
 	TUN bool `json:"tun"`
+	// BlockQUIC rejects UDP 443 under TUN so clients fall back to TCP.
+	// Proxied UDP destinations are resolved with the profile's plain DNS,
+	// whose poisoned answers black-hole QUIC handshakes; TCP keeps working.
+	BlockQUIC bool `json:"block-quic"`
 	// IPv6 enables IPv6 in the core runtime config.
 	IPv6 bool `json:"ipv6"`
 	// InterfaceName pins the outbound network interface (e.g. en1). TUN
@@ -78,6 +82,7 @@ func DefaultConfig() Config {
 		MixedPort:      7890,
 		ControllerPort: 9090,
 		Mode:           "rule",
+		BlockQUIC:      true,
 	}
 }
 
@@ -210,6 +215,12 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 		}
 		return target
 	})
+	if cfg.TUN && cfg.BlockQUIC {
+		// First, before even the per-app rules: QUIC is a transport
+		// correction, not a routing choice. REJECT makes clients fall back
+		// to TCP immediately instead of black-holing video and DoH streams.
+		ruleLines = append([]string{"AND,((NETWORK,UDP),(DST-PORT,443)),REJECT"}, ruleLines...)
+	}
 	injected := injectProcessRules(body.String(), ruleLines, proxyTarget)
 	b.WriteString(injected)
 	if err := os.WriteFile(dest, []byte(b.String()), 0o644); err != nil {

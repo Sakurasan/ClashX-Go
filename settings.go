@@ -70,6 +70,7 @@ type settings struct {
 	allowLAN       bool
 	showTraffic    bool
 	tun            bool
+	blockQUIC      bool
 	tunDNS         string
 	ipv6           bool
 	benchmarkURL   string
@@ -109,6 +110,7 @@ type settingsJSON struct {
 	AllowLAN       bool                  `json:"allowLAN"`
 	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
 	TUN            bool                  `json:"tun"`
+	BlockQUIC      *bool                 `json:"blockQUIC,omitempty"`
 	TunDNS         string                `json:"tunDNS,omitempty"`
 	IPv6           bool                  `json:"ipv6,omitempty"`
 	BenchmarkURL   string                `json:"benchmarkURL,omitempty"`
@@ -139,6 +141,7 @@ func loadSettings(dir string) *settings {
 		proxyBypass:    defaultProxyBypass,
 		shortcuts:      map[string]string{},
 		autoCheckUpd:   true,
+		blockQUIC:      true,
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
 	if err != nil {
@@ -162,6 +165,9 @@ func loadSettings(dir string) *settings {
 	s.systemProxy = w.SystemProxy
 	s.allowLAN = w.AllowLAN
 	s.tun = w.TUN
+	if w.BlockQUIC != nil {
+		s.blockQUIC = *w.BlockQUIC
+	}
 	s.tunDNS = strings.TrimSpace(w.TunDNS)
 	s.ipv6 = w.IPv6
 	if w.BenchmarkURL != "" {
@@ -242,6 +248,7 @@ func saveSettings(dir string, s *settings) {
 		SystemProxy:    s.systemProxy,
 		AllowLAN:       s.allowLAN,
 		TUN:            s.tun,
+		BlockQUIC:      &s.blockQUIC,
 		TunDNS:         s.tunDNS,
 		IPv6:           s.ipv6,
 		BenchmarkURL:   s.benchmarkURL,

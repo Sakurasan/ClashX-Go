@@ -651,6 +651,7 @@ func (a *app) settingsConfig() core.Config {
 			cfg.Mode = s.mode
 		}
 		cfg.TUN = s.tun
+		cfg.BlockQUIC = s.blockQUIC
 		cfg.IPv6 = s.ipv6
 		cfg.BenchmarkURL = s.benchmarkURL
 		for _, r := range s.appRules {

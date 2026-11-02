@@ -402,6 +402,7 @@ func TestWriteRunningConfig(t *testing.T) {
 		"allow-lan: true\n" +
 		"tun:\n  enable: true\n  stack: mixed\n" +
 		"mode: Rule\n" +
+		"rules:\n  - MATCH,DIRECT\n" +
 		"proxy-groups:\n  - name: A\n    type: select\n"
 	if err := os.WriteFile(src, []byte(profile), 0o644); err != nil {
 		t.Fatal(err)
@@ -428,5 +429,38 @@ func TestWriteRunningConfig(t *testing.T) {
 	}
 	if n := len(GroupOrder(dest)); n != 1 {
 		t.Errorf("group order lost: %d", n)
+	}
+	// Anti-QUIC only with TUN: TUN off leaves the profile rules untouched.
+	if strings.Contains(s, "NETWORK,UDP") {
+		t.Errorf("TUN off but anti-QUIC rule injected:\n%s", s)
+	}
+	cfg.TUN = true
+	if _, err := writeRunningConfig(src, dest, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = string(data)
+	const antiQUIC = "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT"
+	if !strings.Contains(s, antiQUIC) {
+		t.Errorf("missing anti-QUIC rule in:\n%s", s)
+	}
+	// The injected rule must precede the profile's MATCH rule, or it never fires.
+	if before := strings.Index(s, antiQUIC); before > strings.Index(s, "MATCH,DIRECT") {
+		t.Errorf("anti-QUIC rule ordered after MATCH rule:\n%s", s)
+	}
+	// Turning the switch off drops the rule even with TUN on.
+	cfg.BlockQUIC = false
+	if _, err := writeRunningConfig(src, dest, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), antiQUIC) {
+		t.Errorf("BlockQUIC off but rule still injected:\n%s", string(data))
 	}
 }
