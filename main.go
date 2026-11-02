@@ -138,13 +138,17 @@ func (a *app) ready() {
 		// ClashX refreshes on open (NSMenuDelegate menuNeedsUpdate), which
 		// MyGo does not expose. Leave the item menu unset so clicks reach
 		// OnClick: rebuild from the freshest state, then pop it up.
-		a.tray.OnClick(func() {
+		showMenu := func() {
 			// Re-check Tailscale so a mid-run takeover/toggle is reflected
 			// immediately, not up to 10s later (no-op when TUN is off).
 			a.refreshTailscaleState()
 			a.menu.rebuild()
 			a.tray.PopUpMenu()
-		})
+		}
+		a.tray.OnClick(showMenu)
+		// Control-click and right-click open the same menu, as a status
+		// item with an NSMenu does.
+		a.tray.OnRightClick(showMenu)
 	}
 	a.panel = &panelApp{app: a, connSel: -1}
 	a.win = mygo.NewWindow(mygo.WindowOptions{
