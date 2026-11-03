@@ -31,8 +31,8 @@ var (
 )
 
 // aboutView renders the ClashX-Meta-style About page: icon, versions, build
-// stamp and project links.
-func aboutView(c *ui.Context) {
+// stamp, update check and project links.
+func (a *app) aboutView(c *ui.Context) {
 	c.SetTheme(appleTheme(c.Theme().Dark))
 	aboutIconOnce.Do(func() {
 		// ClashX Meta's full-resolution app icon, downscaled with a good
@@ -63,6 +63,9 @@ func aboutView(c *ui.Context) {
 			if rev != "" && built != "" {
 				ui.Text(c, built).FontSize(10).TextColor(t.TextMuted).Margin(6, 0, 0, 0)
 			}
+			ui.Row(c).Margin(14, 0, 0, 0).Children(func() {
+				nativeButton(c, T("检查更新"), buttonSecondary, a.checkForUpdates)
+			})
 			ui.Box(c).FillWidth().Height(1).Background(t.Border).Margin(20, 6, 18, 6)
 			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 				ui.Link(c, "mihomo", "https://github.com/MetaCubeX/mihomo").FontSize(12)
@@ -125,7 +128,7 @@ func (a *app) showAbout() {
 			DisableMinimize:   true,
 			DisableMaximize:   true,
 			DisableFullScreen: true,
-			Content:           ui.View(aboutView),
+			Content:           ui.View(a.aboutView),
 		})
 		a.aboutWin.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitting {
