@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -252,6 +253,15 @@ func (c *Controller) SelectProxy(ctx context.Context, group, member string) erro
 			}
 		}
 	})
+	// ClashX Meta drops the group's live connections after a node switch:
+	// otherwise long-lived streams, such as a speed test, keep the old exit.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := c.CloseGroupConnections(ctx, group); err != nil {
+			log.Printf("关闭分组 %q 连接失败: %v", group, err)
+		}
+	}()
 	// ClashX shows a delay for the node you just picked: measure it right
 	// after the switch instead of waiting for the next full test round.
 	go func() {
@@ -416,6 +426,38 @@ func (c *Controller) CloseConnections(ctx context.Context) error {
 // CloseConnection closes one active connection by ID.
 func (c *Controller) CloseConnection(ctx context.Context, id string) error {
 	return c.client.CloseConnection(ctx, id)
+}
+
+// CloseGroupConnections closes active connections whose chain contains the
+// group, as ClashX Meta does after choosing a different node.
+func (c *Controller) CloseGroupConnections(ctx context.Context, group string) error {
+	conns, err := c.client.GetConnections(ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range connectionIDsInGroup(conns, group) {
+		if err := c.client.CloseConnection(ctx, id); err != nil {
+			log.Printf("关闭连接 %s 失败: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// connectionIDsInGroup returns the IDs whose proxy chain contains group.
+func connectionIDsInGroup(conns *Connections, group string) []string {
+	if conns == nil {
+		return nil
+	}
+	var ids []string
+	for _, conn := range conns.Connections {
+		for _, chain := range conn.Chains {
+			if chain == group {
+				ids = append(ids, conn.ID)
+				break
+			}
+		}
+	}
+	return ids
 }
 
 // RefreshSubscription re-downloads the subscription and, when the core is

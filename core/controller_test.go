@@ -32,6 +32,23 @@ func TestApplyProxiesKeepsDelayCache(t *testing.T) {
 	}
 }
 
+// TestConnectionIDsInGroup mirrors ClashX Meta's node-switch cleanup: only
+// connections whose chain contains the switched group are dropped.
+func TestConnectionIDsInGroup(t *testing.T) {
+	conns := &Connections{Connections: []Connection{
+		{ID: "a", Chains: []string{"JP", "Proxies"}},
+		{ID: "b", Chains: []string{"Proxies"}},
+		{ID: "c", Chains: []string{"DIRECT"}},
+	}}
+	got := connectionIDsInGroup(conns, "Proxies")
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("IDs = %v", got)
+	}
+	if got := connectionIDsInGroup(conns, "JP"); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("node IDs = %v", got)
+	}
+}
+
 // TestApplyProxiesCarriesRuntimeConfig keeps the menu in step with changes
 // made from the dashboard, which only exist in the core until saved.
 func TestApplyProxiesCarriesRuntimeConfig(t *testing.T) {
