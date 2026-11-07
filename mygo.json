@@ -2,7 +2,7 @@
   "name": "ClashX Go",
   "slug": "clashx-go",
   "identifier": "com.sakurasan.clashxgo",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "out": "build",
   "icon": "assets/icon.png",
   "updates": {

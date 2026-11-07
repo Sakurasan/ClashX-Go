@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/sfsymbols"
 	"github.com/egoist/mygo/ui"
 	"github.com/smallnest/uix/components/lucide"
 	"github.com/smallnest/uix/components/toast"
@@ -30,6 +31,9 @@ type panelApp struct {
 	tab int
 	// toast is a pending toast pushed on the next frame.
 	toast *toastMsg
+	// windowHidden is the last WindowHidden the view saw, so the
+	// connections poll can pause while the window is hidden or covered.
+	windowHidden bool
 
 	// Connections tab state, refreshed by connectionsLoop while the tab is
 	// visible. Owned by the main thread like the rest of the view.
@@ -60,6 +64,7 @@ const (
 // preferences layout of ClashX Meta (NSTabViewController's toolbar style).
 func (p *panelApp) view(c *ui.Context) {
 	t := c.Theme()
+	p.windowHidden = c.WindowHidden()
 	c.SetTheme(appleTheme(t.Dark))
 	ui.Column(c).Fill().Children(func() {
 		ui.Column(c).FillWidth().Shrink(0).Padding(8, 12).Children(func() {
@@ -100,15 +105,16 @@ func (p *panelApp) view(c *ui.Context) {
 func (p *panelApp) tabBar(c *ui.Context) {
 	t := c.Theme()
 	tabs := []struct {
-		label string
-		icon  *ui.SVG
+		label    string
+		symbol   string
+		fallback *ui.SVG
 	}{
-		{T("通用"), lucide.Settings()},
-		{T("连接"), lucide.Network()},
-		{T("分流"), lucide.Waypoints()},
-		{T("全局快捷键"), lucide.Keyboard()},
-		{T("调试"), lucide.Hammer()},
-		{"Meta", lucide.Info()},
+		{T("通用"), "gearshape", lucide.Settings()},
+		{T("连接"), "network", lucide.Network()},
+		{T("分流"), "arrow.triangle.branch", lucide.Waypoints()},
+		{T("全局快捷键"), "keyboard", lucide.Keyboard()},
+		{T("调试"), "hammer", lucide.Hammer()},
+		{"Meta", "info.circle", lucide.Info()},
 	}
 	ui.Row(c).FillWidth().Justify(ui.Center).Gap(4).Children(func() {
 		for i, tab := range tabs {
@@ -125,7 +131,10 @@ func (p *panelApp) tabBar(c *ui.Context) {
 			b.Label(tab.label)
 			b.Children(func() {
 				ui.Column(c).AlignItems(ui.Center).Gap(3).Children(func() {
-					ui.Icon(c, tab.icon).Size(18, 18).TextColor(ink)
+					sfsymbols.Symbol(c, tab.symbol).
+						Fallback(tab.fallback).
+						Size(18).
+						Color(ink)
 					label := ui.Text(c, tab.label).FontSize(11).TextColor(ink)
 					if selected {
 						label.FontWeight(600)
@@ -148,6 +157,15 @@ func settingsRow(c *ui.Context, label string, control func()) {
 	ui.Row(c).FillWidth().MinHeight(26).AlignItems(ui.Center).Gap(8).Children(func() {
 		ui.Text(c, label).FontSize(13).Grow(1)
 		control()
+	})
+}
+
+// settingsInputRow is settingsRow for a control that takes a caption: it
+// passes the label so an input can name it with LabelledBy for VoiceOver.
+func settingsInputRow(c *ui.Context, label string, control func(label ui.Element)) {
+	ui.Row(c).FillWidth().MinHeight(26).AlignItems(ui.Center).Gap(8).Children(func() {
+		caption := ui.Text(c, label).FontSize(13).Grow(1)
+		control(caption)
 	})
 }
 
@@ -208,9 +226,9 @@ func (p *panelApp) shortcutsPane(c *ui.Context) {
 			for _, act := range a.shortcutActions() {
 				act := act
 				acc := a.settings.shortcuts[act.id]
-				settingsRow(c, act.label, func() {
+				settingsInputRow(c, act.label, func(label ui.Element) {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.TextInput(c, &acc).Width(180).Placeholder(T("未设置"))
+						ui.TextInput(c, &acc).Width(180).Placeholder(T("未设置")).LabelledBy(label)
 						settingsAction(c, T("设置"), func() {
 							a.setShortcut(act.id, act.label, acc)
 						})
@@ -270,9 +288,9 @@ func (p *panelApp) metaPane(c *ui.Context) {
 	a := p.app
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
 		settingsGroup(c, T("TUN"), func() {
-			settingsRow(c, T("Tun DNS"), func() {
+			settingsInputRow(c, T("Tun DNS"), func(label ui.Element) {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.TextInput(c, &a.settings.tunDNS).Width(150).Placeholder("223.5.5.5").
+					ui.TextInput(c, &a.settings.tunDNS).Width(150).Placeholder("223.5.5.5").LabelledBy(label).
 						OnChange(func() { saveSettings(coreDir(), a.settings) }).
 						OnSubmit(func() {
 							saveSettings(coreDir(), a.settings)

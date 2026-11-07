@@ -38,7 +38,7 @@ func (a *app) connectionsLoop() {
 			return
 		}
 		a.win.Update(func() {
-			if !a.win.IsVisible() {
+			if !a.win.IsVisible() || a.win.IsMinimized() || a.panel.windowHidden {
 				return
 			}
 			a.panel.pollConnections()
@@ -211,7 +211,7 @@ func (p *panelApp) activeConnsView(c *ui.Context) {
 					compactBytes(conn.Download), compactBytes(conn.Upload))).FontSize(11).SingleLine()
 			}
 		},
-	}).Grow(1).Submitted()
+	}).Grow(1).KeepScrollbars(true).Submitted()
 	if submitted && p.connSel >= 0 && p.connSel < len(rows) {
 		conn := rows[p.connSel]
 		go p.showConnDetail(conn)
@@ -254,7 +254,7 @@ func (p *panelApp) rulesView(c *ui.Context) {
 				ui.Text(c, orDash(rule.Proxy)).SingleLine()
 			}
 		},
-	}).Grow(1)
+	}).Grow(1).KeepScrollbars(true)
 }
 
 // filteredConnections applies the search box to host, process, rule and

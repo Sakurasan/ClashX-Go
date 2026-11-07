@@ -312,14 +312,14 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			settingsSwitch(c, T("启用 IPv6"), &s.ipv6, func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
-			settingsRow(c, T("代理端口"), func() {
-				ui.TextInput(c, &s.mixedPort).Width(150)
+			settingsInputRow(c, T("代理端口"), func(label ui.Element) {
+				ui.TextInput(c, &s.mixedPort).Width(150).LabelledBy(label)
 			})
-			settingsRow(c, T("Api 端口"), func() {
-				ui.TextInput(c, &s.controller).Width(150)
+			settingsInputRow(c, T("Api 端口"), func(label ui.Element) {
+				ui.TextInput(c, &s.controller).Width(150).LabelledBy(label)
 			})
-			settingsRow(c, T("Api 密钥"), func() {
-				ui.TextInput(c, &s.secret).Width(150).Placeholder(T("可选"))
+			settingsInputRow(c, T("Api 密钥"), func(label ui.Element) {
+				ui.TextInput(c, &s.secret).Width(150).Placeholder(T("可选")).LabelledBy(label)
 			})
 			settingsSwitch(c, T("允许局域网控制（不推荐）"), &s.allowLAN, func() {
 				saveSettings(coreDir(), p.app.settings)
@@ -345,9 +345,9 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			})
 		})
 		settingsGroup(c, T("配置文件"), func() {
-			settingsRow(c, T("本地配置"), func() {
+			settingsInputRow(c, T("本地配置"), func(label ui.Element) {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.TextInput(c, &s.configPath).Width(240).Placeholder("config.yaml")
+					ui.TextInput(c, &s.configPath).Width(240).Placeholder("config.yaml").LabelledBy(label)
 					settingsAction(c, T("浏览…"), func() {
 						files, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 							Title:   T("选择 Clash 配置"),

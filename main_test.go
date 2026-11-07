@@ -59,6 +59,9 @@ func TestPanelSettings(t *testing.T) {
 	if tt.HasText("概览") || tt.HasText("暂无策略组。") {
 		t.Errorf("legacy panel panes still rendered, texts %q", tt.Texts())
 	}
+	if n, ok := tt.AccessByRole(ui.RoleTextField, "代理端口"); !ok || n.Name != "代理端口" {
+		t.Errorf("proxy port input is not labelled: %+v", n)
+	}
 }
 
 // TestPanelTabs renders the shortcuts, debug and Meta tabs.
