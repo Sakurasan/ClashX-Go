@@ -4,12 +4,12 @@
 # `mygo build -platform darwin/universal` bundles a self-contained app
 # with no runtime download (and no slow first-run geo data download).
 #
-# Usage: scripts/fetch-cores.sh [version]   (default: v1.19.32)
+# Usage: scripts/fetch-cores.sh [version]   (default: v1.19.33)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-v1.19.32}"
+VERSION="${1:-v1.19.33}"
 BASE="https://github.com/MetaCubeX/mihomo/releases/download/${VERSION}"
 GEOBASE="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest"
 

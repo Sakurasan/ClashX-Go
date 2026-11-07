@@ -84,7 +84,7 @@
 先为两种架构下载 mihomo 内核，再打包：
 
 ```sh
-scripts/fetch-cores.sh                  # mihomo v1.19.32（arm64 + amd64）
+scripts/fetch-cores.sh                  # mihomo v1.19.33（arm64 + amd64）
 scripts/build-dnshelper.sh              # 通用 Tun DNS 提权组件
 go tool mygo build                      # -> build/darwin-<arch>/ClashX Go.app + .dmg
 go tool mygo build -platform darwin/universal   # 通用版 .app + 通用内核

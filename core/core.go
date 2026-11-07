@@ -23,7 +23,7 @@ import (
 )
 
 // CoreVersion is the mihomo release to download when the binary is missing.
-const CoreVersion = "v1.19.32"
+const CoreVersion = "v1.19.33"
 
 // binaryName returns the extracted executable name.
 func binaryName() string {

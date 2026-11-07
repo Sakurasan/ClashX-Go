@@ -84,6 +84,7 @@ func (a *app) autoUpdateCheckLoop() {
 		ID:    notificationUpdateID,
 		Title: T("ClashX Go 有新版本"),
 		Body:  up.Version + " 可用，点击检查更新",
+		Image: appIconPNG,
 	})
 	_ = n.Show()
 }
