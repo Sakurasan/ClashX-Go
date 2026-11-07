@@ -464,3 +464,32 @@ func TestWriteRunningConfig(t *testing.T) {
 		t.Errorf("BlockQUIC off but rule still injected:\n%s", string(data))
 	}
 }
+
+// TestDropMissingRuleSets covers subscriptions that reference a rule
+// provider they do not define: mihomo rejects the whole config, so the app
+// drops just those rules instead of restarting the core forever.
+func TestDropMissingRuleSets(t *testing.T) {
+	profile := `rule-providers:
+  proxy:
+    type: http
+    behavior: domain
+    url: "https://example.com/proxy.yaml"
+  "广告":
+    type: http
+    behavior: domain
+rules:
+ - RULE-SET,proxy,Proxies
+ - RULE-SET,广告,REJECT
+ - AND,((RULE-SET,missing),(NETWORK,UDP)),REJECT
+ - DOMAIN-SUFFIX,example.com,DIRECT
+`
+	got := dropMissingRuleSets(profile)
+	if strings.Contains(got, "RULE-SET,missing") {
+		t.Errorf("missing-provider rule kept:\n%s", got)
+	}
+	for _, want := range []string{"RULE-SET,proxy,Proxies", "RULE-SET,广告,REJECT", "DOMAIN-SUFFIX,example.com,DIRECT"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

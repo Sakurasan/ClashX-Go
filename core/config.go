@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,6 +98,10 @@ func (c Config) subFile() string {
 // flowNameRE extracts the name from a flow-style group entry,
 // e.g. `- {name: 节点选择, type: select, …}`.
 var flowNameRE = regexp.MustCompile(`^\-\s*\{.*?name:\s*"?([^",}\s][^",}]*)"?\s*,`)
+
+// ruleSetRefRE finds the provider named by a RULE-SET reference, including
+// one inside a logical rule such as AND,((RULE-SET,cn),(NETWORK,TCP)),….
+var ruleSetRefRE = regexp.MustCompile(`RULE-SET,\s*([^,()]+)`)
 
 // DefaultInterface returns the interface carrying the default route, or ""
 // when it cannot be determined. The app re-checks it so a network switch
@@ -221,12 +226,83 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 		// to TCP immediately instead of black-holing video and DoH streams.
 		ruleLines = append([]string{"AND,((NETWORK,UDP),(DST-PORT,443)),REJECT"}, ruleLines...)
 	}
-	injected := injectProcessRules(body.String(), ruleLines, proxyTarget)
+	injected := injectProcessRules(dropMissingRuleSets(body.String()), ruleLines, proxyTarget)
 	b.WriteString(injected)
 	if err := os.WriteFile(dest, []byte(b.String()), 0o644); err != nil {
 		return "", err
 	}
 	return dest, nil
+}
+
+// dropMissingRuleSets removes rules that name a rule-provider the profile
+// does not define. Broken subscriptions ship these (a RULE-SET left after
+// its provider was removed), and mihomo now rejects the whole config with
+// HTTP 400, which used to leave the app restarting the core forever.
+func dropMissingRuleSets(data string) string {
+	lines := strings.Split(data, "\n")
+	providers := map[string]bool{}
+	inProviders := false
+	providerIndent := -1
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent == 0 {
+			inProviders = strings.HasPrefix(trimmed, "rule-providers:")
+			providerIndent = -1
+			continue
+		}
+		if !inProviders {
+			continue
+		}
+		if providerIndent < 0 {
+			providerIndent = indent
+		}
+		if indent == providerIndent {
+			if key, _, ok := strings.Cut(trimmed, ":"); ok {
+				name := strings.TrimSpace(key)
+				name = strings.Trim(name, `"'`)
+				providers[name] = true
+			}
+		}
+	}
+
+	inRules := false
+	dropped := map[string]bool{}
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if trimmed != "" && indent == 0 {
+			inRules = strings.HasPrefix(trimmed, "rules:")
+		}
+		if inRules && strings.HasPrefix(trimmed, "-") {
+			missing := ""
+			for _, m := range ruleSetRefRE.FindAllStringSubmatch(trimmed, -1) {
+				name := strings.TrimSpace(m[1])
+				if !providers[name] {
+					missing = name
+					break
+				}
+			}
+			if missing != "" {
+				dropped[missing] = true
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	if len(dropped) > 0 {
+		names := make([]string, 0, len(dropped))
+		for name := range dropped {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		log.Printf("配置：忽略引用缺失 rule-provider 的规则: %s", strings.Join(names, ", "))
+	}
+	return strings.Join(kept, "\n")
 }
 
 // processRuleLines renders the mihomo rules for the app routing list. A

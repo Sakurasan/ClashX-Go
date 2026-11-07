@@ -320,6 +320,10 @@ func (c *Client) Reload(ctx context.Context, path string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if msg := strings.TrimSpace(string(body)); msg != "" {
+			return fmt.Errorf("PUT /configs path: HTTP %d: %s", resp.StatusCode, msg)
+		}
 		return fmt.Errorf("PUT /configs path: HTTP %d", resp.StatusCode)
 	}
 	return nil
