@@ -71,6 +71,7 @@ type settings struct {
 	showTraffic    bool
 	tun            bool
 	blockQUIC      bool
+	dnsProxy       bool
 	tunDNS         string
 	ipv6           bool
 	benchmarkURL   string
@@ -111,6 +112,7 @@ type settingsJSON struct {
 	ShowTraffic    *bool                 `json:"showTraffic,omitempty"`
 	TUN            bool                  `json:"tun"`
 	BlockQUIC      *bool                 `json:"blockQUIC,omitempty"`
+	DNSProxy       *bool                 `json:"dnsProxy,omitempty"`
 	TunDNS         string                `json:"tunDNS,omitempty"`
 	IPv6           bool                  `json:"ipv6,omitempty"`
 	BenchmarkURL   string                `json:"benchmarkURL,omitempty"`
@@ -167,6 +169,9 @@ func loadSettings(dir string) *settings {
 	s.tun = w.TUN
 	if w.BlockQUIC != nil {
 		s.blockQUIC = *w.BlockQUIC
+	}
+	if w.DNSProxy != nil {
+		s.dnsProxy = *w.DNSProxy
 	}
 	s.tunDNS = strings.TrimSpace(w.TunDNS)
 	s.ipv6 = w.IPv6
@@ -249,6 +254,7 @@ func saveSettings(dir string, s *settings) {
 		AllowLAN:       s.allowLAN,
 		TUN:            s.tun,
 		BlockQUIC:      &s.blockQUIC,
+		DNSProxy:       &s.dnsProxy,
 		TunDNS:         s.tunDNS,
 		IPv6:           s.ipv6,
 		BenchmarkURL:   s.benchmarkURL,

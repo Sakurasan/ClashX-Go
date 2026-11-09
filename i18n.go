@@ -205,6 +205,8 @@ var en = map[string]string{
 	"Tun DNS": "Tun DNS",
 	"应用 DNS":  "Apply DNS",
 	"留空时由 TUN 劫持系统 DNS（推荐，配合 fake-ip 生效）；填写后会在开启 TUN 时把系统 DNS 指向该地址。若同时运行 Tailscale 等接管 DNS 的 VPN，请关闭其 DNS 接管。": "Leave empty to let TUN hijack system DNS (recommended; pairs with fake-ip). When set, TUN mode points system DNS at this address. If another VPN (such as Tailscale) manages DNS, turn its DNS handling off.",
+	"DNS 走代理": "Proxy DNS",
+	"开启后国外域名通过代理查询 DNS，网站看到的解析器跟随代理出口；国内域名仍使用国内 DNS。": "Foreign domains are resolved through the proxy, so the resolver sites see follows the proxy exit. Domestic domains keep using domestic DNS.",
 	"屏蔽 QUIC（UDP 443）": "Block QUIC (UDP 443)",
 	"TUN 下拒绝 QUIC，客户端会立刻回落到可用的 TCP。订阅用明文 DNS 解析代理域名会拿到污染地址，QUIC 因此黑洞，表现为 YouTube 等视频一直转圈；需要 QUIC 时关掉本开关。":                       "Rejects QUIC under TUN so clients fall back to working TCP at once. Plain-DNS lookups of proxied domains return poisoned addresses, which black-hole QUIC handshakes (YouTube videos spin forever). Turn this off if you need QUIC.",
 	"检测到 Tailscale 接管了系统 DNS：域名解析会绕过 Clash，TUN 的规则与 fake-ip 不会生效。可点击菜单栏的 Tailscale 项一键处理，或执行 tailscale set --accept-dns=false。": "Tailscale is managing system DNS: lookups bypass Clash, so TUN rules and fake-ip do not apply. Use the Tailscale item in the menu bar, or run tailscale set --accept-dns=false.",

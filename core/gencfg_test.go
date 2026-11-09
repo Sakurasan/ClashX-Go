@@ -493,3 +493,29 @@ rules:
 		}
 	}
 }
+
+// TestWriteDNSSectionProxy checks the opt-in DNS configuration: foreign
+// domains use DoH through the proxy, domestic domains keep CN resolvers.
+func TestWriteDNSSectionProxy(t *testing.T) {
+	cfg := DefaultConfig()
+	var plain strings.Builder
+	cfg.writeDNSSection(&plain)
+	if strings.Contains(plain.String(), "respect-rules") {
+		t.Errorf("default DNS should not follow rules:\n%s", plain.String())
+	}
+	cfg.DNSProxy = true
+	var b strings.Builder
+	cfg.writeDNSSection(&b)
+	s := b.String()
+	for _, want := range []string{
+		"respect-rules: true",
+		"- https://1.1.1.1/dns-query",
+		"nameserver-policy:",
+		"\"geosite:cn,private\":",
+		"- 223.5.5.5",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
+		}
+	}
+}

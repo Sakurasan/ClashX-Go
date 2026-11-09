@@ -20,7 +20,7 @@ import (
 )
 
 // appVersion mirrors mygo.json.
-const appVersion = "0.2.13"
+const appVersion = "0.2.14"
 
 //go:embed assets/icon.png
 var appIconPNG []byte

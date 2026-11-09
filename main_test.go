@@ -78,8 +78,8 @@ func TestPanelTabs(t *testing.T) {
 		if !tt.HasText(want) {
 			t.Errorf("tab %d missing %q, texts %q", tab, want, tt.Texts())
 		}
-		if tab == tabMeta && !tt.HasText("Tun DNS") {
-			t.Errorf("Meta tab missing Tun DNS, texts %q", tt.Texts())
+		if tab == tabMeta && (!tt.HasText("Tun DNS") || !tt.HasText("DNS 走代理")) {
+			t.Errorf("Meta tab missing DNS settings, texts %q", tt.Texts())
 		}
 	}
 }

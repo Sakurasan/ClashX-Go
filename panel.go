@@ -304,6 +304,16 @@ func (p *panelApp) metaPane(c *ui.Context) {
 			})
 			ui.Text(c, T("留空时由 TUN 劫持系统 DNS（推荐，配合 fake-ip 生效）；填写后会在开启 TUN 时把系统 DNS 指向该地址。若同时运行 Tailscale 等接管 DNS 的 VPN，请关闭其 DNS 接管。")).
 				FontSize(11).TextColor(t.TextMuted)
+			settingsSwitch(c, T("DNS 走代理"), &a.settings.dnsProxy, func() {
+				saveSettings(coreDir(), a.settings)
+				go func() {
+					if err := a.applyConfig(a.settingsConfig()); err != nil {
+						log.Printf("DNS proxy: %v", err)
+					}
+				}()
+			})
+			ui.Text(c, T("开启后国外域名通过代理查询 DNS，网站看到的解析器跟随代理出口；国内域名仍使用国内 DNS。")).
+				FontSize(11).TextColor(t.TextMuted)
 			settingsSwitch(c, T("屏蔽 QUIC（UDP 443）"), &a.settings.blockQUIC, func() {
 				saveSettings(coreDir(), a.settings)
 				go func() {

@@ -67,27 +67,49 @@ func (m *Manager) Binary() string { return filepath.Join(m.dir, binaryName()) }
 // first launch needs no network. It reports the core version.
 func (m *Manager) EnsureBinary() (string, error) {
 	bin := m.Binary()
-	if _, err := os.Stat(bin); err == nil {
-		return CoreVersion, nil
-	}
-	res := bundledBinary()
-	if res == "" {
-		return "", fmt.Errorf("no bundled mihomo for %s/%s in resources", runtime.GOOS, runtime.GOARCH)
-	}
-	if err := copyFile(res, bin); err != nil {
-		return "", err
-	}
-	// GeoIP database: copy it when bundled (exists in resources/geoip.metadb
-	// or resources/darwin-<arch>/geoip.metadb).
-	for _, cand := range bundledGeoIPCandidates() {
-		if err := copyFile(cand, filepath.Join(m.dir, filepath.Base(cand))); err != nil {
-			// The database is optional — a subscription config without
-			// GEOIP rules still works; only log and continue.
-			continue
+	if _, err := os.Stat(bin); err != nil {
+		res := bundledBinary()
+		if res == "" {
+			return "", fmt.Errorf("no bundled mihomo for %s/%s in resources", runtime.GOOS, runtime.GOARCH)
 		}
-		break
+		if err := copyFile(res, bin); err != nil {
+			return "", err
+		}
 	}
+	// The databases ship with the app and change with a release: sync them
+	// even when the binary is already installed, so GEOIP and
+	// nameserver-policy's geosite:cn,private keep matching the bundle.
+	m.ensureGeoData()
 	return CoreVersion, nil
+}
+
+// ensureGeoData copies the bundled GeoIP and GeoSite databases into the
+// manager's working directory when missing or a different size.
+func (m *Manager) ensureGeoData() {
+	for _, name := range []string{"geoip.metadb", "geosite.dat"} {
+		dest := filepath.Join(m.dir, name)
+		for _, cand := range bundledDataCandidates(name) {
+			if sameFileSize(cand, dest) {
+				break
+			}
+			if err := copyFile(cand, dest); err != nil {
+				// The data is optional: a profile without GEOIP rules or
+				// geosite policies still works.
+				continue
+			}
+			break
+		}
+	}
+}
+
+// sameFileSize reports whether both files exist with the same size.
+func sameFileSize(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	return err == nil && ai.Size() == bi.Size()
 }
 
 // copyFile copies src to dest with 0755 permissions, atomically via a tmp
@@ -115,14 +137,14 @@ func copyFile(src, dest string) error {
 	return os.Rename(dest+".tmp", dest)
 }
 
-// bundledGeoIPCandidates returns possible bundled geoip.metadb paths.
-func bundledGeoIPCandidates() []string {
+// bundledDataCandidates returns possible bundled paths of a data file.
+func bundledDataCandidates(name string) []string {
 	var out []string
 	add := func(dir string) {
 		if dir == "" {
 			return
 		}
-		for _, sub := range []string{"geoip.metadb", "darwin-" + runtime.GOARCH + "/geoip.metadb", runtime.GOARCH + "/geoip.metadb"} {
+		for _, sub := range []string{name, "darwin-" + runtime.GOARCH + "/" + name, runtime.GOARCH + "/" + name} {
 			out = append(out, filepath.Join(dir, sub))
 		}
 	}

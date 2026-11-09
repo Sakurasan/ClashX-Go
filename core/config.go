@@ -54,6 +54,10 @@ type Config struct {
 	// Proxied UDP destinations are resolved with the profile's plain DNS,
 	// whose poisoned answers black-hole QUIC handshakes; TCP keeps working.
 	BlockQUIC bool `json:"block-quic"`
+	// DNSProxy resolves non-domestic domains through the proxy, so the
+	// recursive resolver foreign sites see follows the exit IP. Domestic
+	// domains still use plain CN resolvers.
+	DNSProxy bool `json:"dns-proxy"`
 	// IPv6 enables IPv6 in the core runtime config.
 	IPv6 bool `json:"ipv6"`
 	// InterfaceName pins the outbound network interface (e.g. en1). TUN
@@ -134,12 +138,23 @@ func (c Config) writeInterfaceName(b *strings.Builder) {
 
 // writeDNSSection emits the app-managed DNS block: fake-ip so proxied
 // domains reach the core by name (rules and remote resolution keep
-// working), with plain CN resolvers only. Foreign DoH/DoT fallbacks are
-// deliberately absent — on many networks they are unreachable or poisoned
-// and every foreign lookup first waits for their timeouts.
+// working). By default it uses plain CN resolvers only: foreign DoH/DoT
+// fallbacks are often unreachable or poisoned, and every foreign lookup
+// waits for their timeouts first. With DNSProxy the foreign nameserver is
+// a DoH endpoint reached through the proxy, while CN domains keep the fast
+// plain resolvers: a DNS leak test then sees the exit's resolver, not a
+// Chinese one.
 func (c Config) writeDNSSection(b *strings.Builder) {
 	b.WriteString("dns:\n  enable: true\n  listen: 127.0.0.1:1053\n  enhanced-mode: fake-ip\n")
 	fmt.Fprintf(b, "  fake-ip-range: 198.18.0.1/16\n  ipv6: %t\n", c.IPv6)
+	if c.DNSProxy {
+		b.WriteString("  use-hosts: true\n  respect-rules: true\n" +
+			"  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" +
+			"  proxy-server-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" +
+			"  nameserver:\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query\n" +
+			"  nameserver-policy:\n    \"geosite:cn,private\":\n      - 223.5.5.5\n      - 119.29.29.29\n")
+		return
+	}
 	b.WriteString("  default-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" +
 		"  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" +
 		"  proxy-server-nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n")

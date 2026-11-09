@@ -26,7 +26,8 @@ fetch_arch() {
   echo "==> wrote ${dir}/mihomo ($(du -h "${dir}/mihomo" | cut -f1))"
 }
 
-# GeoIP database ships once (not per-arch) and is used by the GEOIP rules.
+# GeoIP and GeoSite databases ship once (not per-arch): GEOIP rules use
+# the former, and nameserver-policy's geosite:cn,private uses the latter.
 fetch_geoip() {
   local dest="resources/geoip.metadb"
   echo "==> ${GEOBASE}/geoip.metadb"
@@ -34,7 +35,24 @@ fetch_geoip() {
   echo "==> wrote ${dest} ($(du -h "${dest}" | cut -f1))"
 }
 
+fetch_geosite() {
+  local dest="resources/geosite.dat"
+  # The release asset is occasionally unavailable; jsDelivr carries the
+  # same V2Ray geosite database.
+  for url in "${GEOBASE}/geosite.dat" \
+    "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"; do
+    echo "==> ${url}"
+    if curl -fSL --retry 3 "${url}" -o "${dest}"; then
+      echo "==> wrote ${dest} ($(du -h "${dest}" | cut -f1))"
+      return
+    fi
+  done
+  echo "error: could not download geosite.dat" >&2
+  return 1
+}
+
 fetch_arch arm64
 fetch_arch amd64
 fetch_geoip
+fetch_geosite
 echo "done"

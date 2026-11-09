@@ -26,6 +26,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	s.lang = "en"
 	s.mode = "global"
 	s.blockQUIC = false
+	s.dnsProxy = true
 	s.appRules = []appRoutingRule{{Name: "Telegram", Process: "Telegram", Path: "/Applications/Telegram.app", Target: "proxy"}}
 	saveSettings(dir, s)
 
@@ -60,6 +61,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	// Default-true bools must persist as false through the pointer mirror.
 	if got.blockQUIC {
 		t.Errorf("blockQUIC = true, want the persisted false")
+	}
+	if !got.dnsProxy {
+		t.Errorf("dnsProxy = false, want the persisted true")
 	}
 	if len(got.appRules) != 1 || got.appRules[0].Process != "Telegram" ||
 		got.appRules[0].Path != "/Applications/Telegram.app" || got.appRules[0].Target != "proxy" {

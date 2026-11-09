@@ -2,7 +2,7 @@
   "name": "ClashX Go",
   "slug": "clashx-go",
   "identifier": "com.sakurasan.clashxgo",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "out": "build",
   "icon": "assets/icon.png",
   "updates": {
@@ -10,5 +10,10 @@
     "github": "Sakurasan/ClashX-Go",
     "tagPrefix": "v",
     "deltas": 1
+  },
+  "macos": {
+    "infoPlist": {
+      "LSUIElement": true
+    }
   }
 }
