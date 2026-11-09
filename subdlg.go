@@ -28,7 +28,7 @@ func (a *app) showSubscriptionDialog() {
 			Hidden: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
 			Content: ui.View(d.view),
 		})
-		d.win.OnClose(func(e *mygo.CloseEvent) { e.PreventDefault(); d.win.Hide() })
+		d.win.OnClose(a.closeToHide(d.win))
 		a.subDlg = d
 	}
 	d.url = ""

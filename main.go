@@ -88,6 +88,20 @@ func setupLogging(dir string) {
 	log.SetOutput(io.MultiWriter(os.Stderr, f))
 }
 
+// closeToHide makes a window hide instead of closing when the user clicks its
+// close button, unless the app is quitting. The quit sequence closes every
+// live window — including hidden ones — and a window that refuses the close
+// cancels the whole quit, leaving the app running with quitting already set.
+func (a *app) closeToHide(win *mygo.Window) func(*mygo.CloseEvent) {
+	return func(e *mygo.CloseEvent) {
+		if a.quitting {
+			return
+		}
+		e.PreventDefault()
+		win.Hide()
+	}
+}
+
 // ready wires the tray, the controller and the panel window.
 func (a *app) ready() {
 	dir := coreDir()
@@ -158,12 +172,7 @@ func (a *app) ready() {
 		Hidden:  true,
 		Content: ui.View(a.panel.view),
 	})
-	a.win.OnClose(func(e *mygo.CloseEvent) {
-		if !a.quitting {
-			e.PreventDefault()
-			a.win.Hide()
-		}
-	})
+	a.win.OnClose(a.closeToHide(a.win))
 	// Refresh the connections page the moment it becomes visible instead of
 	// waiting for the next poll tick.
 	a.win.OnShow(func() { a.panel.pollConnections() })

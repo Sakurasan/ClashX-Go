@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"clashx-go/core"
@@ -239,6 +240,18 @@ func TestAboutView(t *testing.T) {
 		if !tt.HasText(want) {
 			t.Errorf("about page missing %q, texts %q", want, tt.Texts())
 		}
+	}
+}
+
+// The quit sequence closes every live window, hidden ones included. A window
+// that prevents that close makes mygo cancel the whole quit, so every window
+// must let go once quitting is set.
+func TestCloseToHideDoesNotCancelQuit(t *testing.T) {
+	a := &app{quitting: true}
+	e := &mygo.CloseEvent{}
+	a.closeToHide(nil)(e)
+	if e.DefaultPrevented() {
+		t.Fatal("window refused to close while quitting: the quit would be canceled")
 	}
 }
 

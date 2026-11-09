@@ -26,7 +26,7 @@ func (a *app) showManageWindow() {
 			Hidden: true, DisableMinimize: true,
 			Content: ui.View(m.view),
 		})
-		m.win.OnClose(func(e *mygo.CloseEvent) { e.PreventDefault(); m.win.Hide() })
+		m.win.OnClose(a.closeToHide(m.win))
 		a.manage = m
 	}
 	for i, p := range a.settings.profiles {

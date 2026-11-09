@@ -20,7 +20,7 @@ import (
 )
 
 // appVersion mirrors mygo.json.
-const appVersion = "0.2.14"
+const appVersion = "0.2.15"
 
 //go:embed assets/icon.png
 var appIconPNG []byte
@@ -130,12 +130,7 @@ func (a *app) showAbout() {
 			DisableFullScreen: true,
 			Content:           ui.View(a.aboutView),
 		})
-		a.aboutWin.OnClose(func(e *mygo.CloseEvent) {
-			if !a.quitting {
-				e.PreventDefault()
-				a.aboutWin.Hide()
-			}
-		})
+		a.aboutWin.OnClose(a.closeToHide(a.aboutWin))
 	}
 	a.aboutWin.Center()
 	a.aboutWin.Show()
