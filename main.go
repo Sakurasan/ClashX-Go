@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -35,6 +36,8 @@ type app struct {
 	aboutWin *mygo.Window
 	tray     *mygo.Tray
 	quitting bool
+	// lastConfigError dedupes the dialog for a config the core rejected.
+	lastConfigError string
 
 	// activeAPI is the TCP controller port chosen for this run. The
 	// configured port stays untouched, so a port still finishing shutdown
@@ -447,7 +450,7 @@ func (a *app) startCoreLocked() error {
 // remembered node selections.
 func (a *app) postStartConfig() {
 	if a.configSourcePath() != "" {
-		a.reloadLive(a.settingsConfig())
+		a.reloadLiveStartup(a.settingsConfig())
 	}
 	a.refreshActiveSubIfStale()
 	// TUN is up (Start verified the utun) and the settings may have come
@@ -572,9 +575,17 @@ func (a *app) applyConfig(cfg core.Config) error {
 // reloadLive applies the config in the background. mihomo's PUT /configs
 // blocks until rule/proxy providers finish initialising (seconds when they
 // pull from the network) while the old routing keeps serving, so waiting
-// on it in the caller made every switch feel slow. A failed reload falls
-// back to a process restart.
-func (a *app) reloadLive(cfg core.Config) {
+// on it in the caller made every switch feel slow. Transient failures fall
+// back to a process restart; a config mihomo rejects does not, because the
+// same config would fail every time and leave the app restarting forever.
+func (a *app) reloadLive(cfg core.Config) { a.reloadLiveWith(cfg, false) }
+
+// reloadLiveStartup applies the first full config after the core came up
+// on its bootstrap config. A rejected config falls back to the last one
+// that worked, or leaves the core on its direct bootstrap config.
+func (a *app) reloadLiveStartup(cfg core.Config) { a.reloadLiveWith(cfg, true) }
+
+func (a *app) reloadLiveWith(cfg core.Config, startup bool) {
 	a.reloadMu.Lock()
 	defer a.reloadMu.Unlock()
 	startedAt := time.Now()
@@ -585,12 +596,18 @@ func (a *app) reloadLive(cfg core.Config) {
 		if a.quitting || !a.ctrl.Manager().Running() {
 			return
 		}
+		var cfgErr *core.ConfigError
+		if errors.As(err, &cfgErr) {
+			a.handleRejectedConfig(cfgErr, startup)
+			return
+		}
 		log.Printf("live reload failed, restarting core: %v", err)
 		if rerr := a.restartCore(cfg); rerr != nil {
 			log.Printf("restart after failed reload: %v", rerr)
 		}
 		return
 	}
+	a.rememberGoodConfig()
 	log.Printf("live reload in %s", time.Since(startedAt).Round(time.Millisecond))
 	a.replaySelections()
 	// ClashX closes established chains after a config change so new
@@ -598,6 +615,78 @@ func (a *app) reloadLive(cfg core.Config) {
 	go a.closeConnections()
 	// The reload may have turned TUN on or off; keep system DNS in step.
 	go a.reconcileTunDNS()
+}
+
+// lastGoodConfigPath is the config that last passed mihomo's validation.
+func lastGoodConfigPath() string {
+	return filepath.Join(coreDir(), "running.lastgood.yaml")
+}
+
+// rememberGoodConfig keeps the applied runtime config as the fallback for
+// a later config the core rejects.
+func (a *app) rememberGoodConfig() {
+	data, err := os.ReadFile(filepath.Join(coreDir(), "running.yaml"))
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(lastGoodConfigPath(), data, 0o644); err != nil {
+		log.Printf("保存上次可用配置失败: %v", err)
+	}
+	if a.win != nil {
+		a.win.Update(func() { a.lastConfigError = "" })
+	}
+}
+
+// restoreGoodRuntime puts the last-good config back in running.yaml.
+func restoreGoodRuntime() bool {
+	data, err := os.ReadFile(lastGoodConfigPath())
+	if err != nil {
+		return false
+	}
+	return os.WriteFile(filepath.Join(coreDir(), "running.yaml"), data, 0o644) == nil
+}
+
+// handleRejectedConfig keeps a rejected config from turning into a restart
+// loop: a live core keeps serving its current config, and a freshly
+// started core falls back to the last config that worked.
+func (a *app) handleRejectedConfig(err error, startup bool) {
+	log.Printf("配置被核心拒绝: %v", err)
+	if startup {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ferr := a.ctrl.ReloadPath(ctx, lastGoodConfigPath())
+		cancel()
+		if ferr == nil {
+			restoreGoodRuntime()
+			a.showConfigError(err, "新配置无效，已回退到上次可用的配置。")
+			return
+		}
+		a.showConfigError(err, "新配置无效，且没有可回退的配置；核心将以直连模式继续运行。")
+		return
+	}
+	// mihomo kept the old config in memory; keep the file in step so a
+	// later core restart does not pick the rejected one up again.
+	restoreGoodRuntime()
+	a.showConfigError(err, "核心拒绝了新的配置，已继续使用当前配置。")
+}
+
+// showConfigError reports a rejected config once per distinct error.
+func (a *app) showConfigError(err error, message string) {
+	if a.win == nil {
+		return
+	}
+	detail := err.Error()
+	a.win.Update(func() {
+		if a.lastConfigError == detail {
+			return
+		}
+		a.lastConfigError = detail
+		_, _ = mygo.Dialog.Message(mygo.MessageOptions{
+			Type:    mygo.MessageError,
+			Title:   T("配置无效"),
+			Message: T(message),
+			Detail:  detail,
+		})
+	})
 }
 
 // restartCore stops the old controller config and starts a new one.

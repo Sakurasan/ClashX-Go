@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -74,10 +75,19 @@ func NewController(mgr *Manager, cfg Config) *Controller {
 	if cfg.ControllerSocket != "" {
 		client = NewUnixClient(cfg.ControllerSocket, cfg.Secret)
 	}
+	// Read the group order from the profile before the core starts. The
+	// bootstrap config has no proxy-groups, and waiting for the first live
+	// reload would make the menu show groups alphabetically for a few
+	// seconds.
+	order := GroupOrder(cfg.ConfigPath)
+	if len(order) == 0 && cfg.SubscriptionURL != "" && mgr != nil {
+		order = GroupOrder(filepath.Join(mgr.Dir(), cfg.subFile()))
+	}
 	c := &Controller{
-		mgr:    mgr,
-		cfg:    cfg,
-		client: client,
+		mgr:        mgr,
+		cfg:        cfg,
+		client:     client,
+		groupOrder: order,
 		// Initialised up front: SelectProxy's delay probe may run before
 		// the first group test (e.g. remembered selections replayed at
 		// startup) and must not assign into a nil map.
@@ -128,8 +138,10 @@ func (c *Controller) Start(ctx context.Context) error {
 		return c.client.Ping(context.Background())
 	}); err != nil {
 		return err
-	} else {
-		c.groupOrder = GroupOrder(configPath)
+	} else if order := GroupOrder(configPath); len(order) > 0 {
+		c.mu.Lock()
+		c.groupOrder = order
+		c.mu.Unlock()
 	}
 	c.setState(func(s *State) {
 		s.Running = true
@@ -347,6 +359,21 @@ func (c *Controller) SetMode(ctx context.Context, mode string) error {
 		return err
 	}
 	c.setState(func(s *State) { s.Mode = mode })
+	// Global mode adds the built-in GLOBAL group; refresh right away so
+	// the menu opened next already has it, instead of a poll later.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cfg, err := c.client.GetConfigs(ctx)
+		if err != nil {
+			return
+		}
+		proxies, err := c.client.GetProxies(ctx)
+		if err != nil {
+			return
+		}
+		c.applyProxies(cfg.Mode, cfg.AllowLAN, proxies)
+	}()
 	return nil
 }
 
@@ -416,6 +443,13 @@ func (c *Controller) testLoop(ctx context.Context) {
 		case <-time.After(testDelayRefresh):
 		}
 	}
+}
+
+// ReloadPath asks the running core to load the config at path without
+// changing the app's own Config; used to fall back to a last-good file
+// after a new config was rejected.
+func (c *Controller) ReloadPath(ctx context.Context, path string) error {
+	return c.client.Reload(ctx, path)
 }
 
 // CloseConnections closes all active connections.
@@ -488,7 +522,7 @@ func (c *Controller) RefreshSubscription(ctx context.Context) (int, string, erro
 func (c *Controller) applyProxies(mode string, allowLAN bool, proxies *Proxies) {
 	groups := []*GroupView{}
 	sel := map[string]string{}
-	for name, p := range proxies.ProxyGroups() {
+	for name, p := range proxies.ProxyGroups(mode) {
 		g := &GroupView{Name: name, Type: p.Type, Current: p.Now, Members: p.All, Delays: map[string]int{}}
 		// Seed the delay map from the probe history that mihomo keeps for
 		// the group's current member. A Delay of 0 means untested yet.
@@ -499,7 +533,10 @@ func (c *Controller) applyProxies(mode string, allowLAN bool, proxies *Proxies) 
 		groups = append(groups, g)
 		sel[name] = p.Now
 	}
-	sortGroups(groups, c.groupOrder)
+	c.mu.Lock()
+	order := append([]string(nil), c.groupOrder...)
+	c.mu.Unlock()
+	sortGroups(groups, order)
 	c.setState(func(s *State) {
 		for _, g := range groups {
 			for n, d := range c.delays[g.Name] {
@@ -527,6 +564,11 @@ func sortGroups(groups []*GroupView, order []string) {
 		}
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
+		// The built-in GLOBAL group is the catch-all of global mode; it
+		// comes first, before the profile's own groups.
+		if iGlobal, jGlobal := groups[i].Name == "GLOBAL", groups[j].Name == "GLOBAL"; iGlobal != jGlobal {
+			return iGlobal
+		}
 		gi, oki := idx[groups[i].Name]
 		gj, okj := idx[groups[j].Name]
 		switch {

@@ -35,6 +35,23 @@ fetch_geoip() {
   echo "==> wrote ${dest} ($(du -h "${dest}" | cut -f1))"
 }
 
+fetch_asn() {
+  local dest="resources/ASN.mmdb"
+  # mihomo looks for ASN.mmdb in its working directory; the release asset is
+  # named GeoLite2-ASN.mmdb.
+  for url in "${GEOBASE}/GeoLite2-ASN.mmdb" \
+    "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/GeoLite2-ASN.mmdb" \
+    "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb"; do
+    echo "==> ${url}"
+    if curl -fSL --retry 3 --max-time 300 "${url}" -o "${dest}"; then
+      echo "==> wrote ${dest} ($(du -h "${dest}" | cut -f1))"
+      return
+    fi
+  done
+  echo "error: could not download GeoLite2-ASN.mmdb" >&2
+  return 1
+}
+
 fetch_geosite() {
   local dest="resources/geosite.dat"
   # The release asset is occasionally unavailable; jsDelivr carries the
@@ -55,4 +72,5 @@ fetch_arch arm64
 fetch_arch amd64
 fetch_geoip
 fetch_geosite
+fetch_asn
 echo "done"

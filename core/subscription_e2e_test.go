@@ -92,7 +92,7 @@ func TestSubscriptionE2E(t *testing.T) {
 		// PROXY/AUTO come from the file provider; they must have >1 member
 		// once the provider has expanded (GLOBAL always has defaults).
 		loaded := 0
-		for name, g := range px.ProxyGroups() {
+		for name, g := range px.ProxyGroups("rule") {
 			if name == "PROXY" || name == "AUTO" {
 				loaded += len(g.All)
 			}
@@ -106,7 +106,7 @@ func TestSubscriptionE2E(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	groups := last.ProxyGroups()
+	groups := last.ProxyGroups("rule")
 	fmt.Printf("E2E groups=%d\n", len(groups))
 	for name, g := range groups {
 		fmt.Printf("E2E group %s type=%s members=%d now=%s\n", name, g.Type, len(g.All), g.Now)

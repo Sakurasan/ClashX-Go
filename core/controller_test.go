@@ -1,6 +1,9 @@
 package core
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -64,5 +67,47 @@ func TestApplyProxiesCarriesRuntimeConfig(t *testing.T) {
 	s := c.State()
 	if !s.ConfigLoaded || s.Mode != "global" || !s.AllowLAN {
 		t.Fatalf("runtime config not applied: %+v", s)
+	}
+}
+
+// TestProxyGroupsFollowMode mirrors ClashX: the built-in GLOBAL group is
+// shown only in global mode, and comes first there.
+func TestProxyGroupsFollowMode(t *testing.T) {
+	px := &Proxies{Proxies: map[string]*Proxy{
+		"GLOBAL":  {Name: "GLOBAL", Type: "Selector", Now: "DIRECT"},
+		"Proxies": {Name: "Proxies", Type: "Selector", Now: "DIRECT"},
+	}}
+	if _, ok := px.ProxyGroups("rule")["GLOBAL"]; ok {
+		t.Error("GLOBAL shown in rule mode")
+	}
+	if _, ok := px.ProxyGroups("global")["GLOBAL"]; !ok {
+		t.Error("GLOBAL missing in global mode")
+	}
+	groups := []*GroupView{{Name: "Proxies"}, {Name: "GLOBAL"}}
+	sortGroups(groups, []string{"Proxies"})
+	if groups[0].Name != "GLOBAL" {
+		t.Errorf("GLOBAL is not first: %v, %v", groups[0].Name, groups[1].Name)
+	}
+}
+
+// TestNewControllerReadsGroupOrder guards startup: the core boots with a
+// bootstrap config without proxy groups, so the order must already come
+// from the subscription file, not wait for the first live reload.
+func TestNewControllerReadsGroupOrder(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := "proxy-groups:\n  - name: Proxies\n    type: select\n  - name: HK\n    type: select\n"
+	if err := os.WriteFile(filepath.Join(dir, "sub-test.yaml"), []byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.SubscriptionURL = "https://example.com/sub"
+	cfg.SubscriptionFile = "sub-test.yaml"
+	c := NewController(mgr, cfg)
+	if want := []string{"Proxies", "HK"}; !slices.Equal(c.groupOrder, want) {
+		t.Errorf("groupOrder = %v, want %v", c.groupOrder, want)
 	}
 }

@@ -238,11 +238,12 @@ type Proxies struct {
 }
 
 // ProxyGroups returns the proxies whose type is a policy group (Selector,
-// URLTest, Fallback, LoadBalance), skipping hidden built-ins like GLOBAL.
-func (p *Proxies) ProxyGroups() map[string]*Proxy {
+// URLTest, Fallback, LoadBalance). The built-in GLOBAL group appears only
+// in global mode, as it does in ClashX.
+func (p *Proxies) ProxyGroups(mode string) map[string]*Proxy {
 	out := map[string]*Proxy{}
 	for name, pr := range p.Proxies {
-		if pr.Hidden || name == "GLOBAL" { // ClashX hides the built-in catch-all
+		if pr.Hidden || (name == "GLOBAL" && mode != "global") {
 			continue
 		}
 		switch pr.Type {
@@ -305,6 +306,21 @@ func (c *Client) SelectProxy(ctx context.Context, group, member string) error {
 // longer on a cold cache). The caller's context still bounds the wait.
 var reloadHTTP = &http.Client{Timeout: 2 * time.Minute}
 
+// ConfigError is a config the core rejected (HTTP 400). It is not a
+// transient API failure: retrying the same config cannot work, so the app
+// keeps the running config instead of restarting the core.
+type ConfigError struct {
+	Status  int
+	Message string
+}
+
+func (e *ConfigError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("PUT /configs path: HTTP %d: %s", e.Status, e.Message)
+	}
+	return fmt.Sprintf("PUT /configs path: HTTP %d", e.Status)
+}
+
 // Reload asks the running core to re-read a config file in place
 // (PUT /configs {"path"}), the zero-downtime reload path.
 func (c *Client) Reload(ctx context.Context, path string) error {
@@ -320,11 +336,8 @@ func (c *Client) Reload(ctx context.Context, path string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if msg := strings.TrimSpace(string(body)); msg != "" {
-			return fmt.Errorf("PUT /configs path: HTTP %d: %s", resp.StatusCode, msg)
-		}
-		return fmt.Errorf("PUT /configs path: HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return &ConfigError{Status: resp.StatusCode, Message: strings.TrimSpace(string(body))}
 	}
 	return nil
 }

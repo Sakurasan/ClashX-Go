@@ -97,7 +97,7 @@ blocked by Gatekeeper: right-click the app → **Open**, or allow it in
 Fetch the mihomo core for both architectures first, then build the app:
 
 ```sh
-scripts/fetch-cores.sh                  # mihomo v1.19.33 + GeoIP/GeoSite data
+scripts/fetch-cores.sh                  # mihomo v1.19.33 + GeoIP/GeoSite/ASN data
 scripts/build-dnshelper.sh              # universal Tun DNS helper
 go tool mygo build                      # -> build/darwin-<arch>/ClashX Go.app + .dmg
 go tool mygo build -platform darwin/universal   # universal app + universal core

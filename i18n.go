@@ -289,4 +289,8 @@ var en = map[string]string{
 	"复制失败":        "Copy Failed",
 	"切换模式失败":      "Failed to Switch Mode",
 	"切换节点失败":      "Failed to Switch Node",
+	"配置无效":        "Invalid Config",
+	"新配置无效，已回退到上次可用的配置。":            "The new config is invalid; the last working config was restored.",
+	"新配置无效，且没有可回退的配置；核心将以直连模式继续运行。": "The new config is invalid and there is no last working config; the core continues in direct mode.",
+	"核心拒绝了新的配置，已继续使用当前配置。":          "The core rejected the new config; the current config keeps running.",
 }

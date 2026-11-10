@@ -86,7 +86,7 @@ func (m *Manager) EnsureBinary() (string, error) {
 // ensureGeoData copies the bundled GeoIP and GeoSite databases into the
 // manager's working directory when missing or a different size.
 func (m *Manager) ensureGeoData() {
-	for _, name := range []string{"geoip.metadb", "geosite.dat"} {
+	for _, name := range []string{"geoip.metadb", "geosite.dat", "ASN.mmdb"} {
 		dest := filepath.Join(m.dir, name)
 		for _, cand := range bundledDataCandidates(name) {
 			if sameFileSize(cand, dest) {

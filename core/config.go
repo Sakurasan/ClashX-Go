@@ -226,7 +226,8 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 	}
 	// The catch-all target is where unmatched traffic already goes, so it is
 	// the least surprising destination for "via proxy" app rules.
-	if match := profileMatchTarget(src); match != "" && !strings.EqualFold(match, "DIRECT") && !strings.EqualFold(match, "REJECT") {
+	if match := profileMatchTarget(src); match != "" && slices.Contains(groups, match) &&
+		!strings.EqualFold(match, "DIRECT") && !strings.EqualFold(match, "REJECT") {
 		proxyTarget = match
 	}
 	ruleLines := processRuleLines(cfg.ProcessRules, func(target string) string {
@@ -241,7 +242,8 @@ func writeRunningConfig(src, dest string, cfg Config) (string, error) {
 		// to TCP immediately instead of black-holing video and DoH streams.
 		ruleLines = append([]string{"AND,((NETWORK,UDP),(DST-PORT,443)),REJECT"}, ruleLines...)
 	}
-	injected := injectProcessRules(dropMissingRuleSets(body.String()), ruleLines, proxyTarget)
+	bodyText := dropMissingRuleTargets(dropMissingRuleSets(body.String()))
+	injected := injectProcessRules(bodyText, ruleLines, proxyTarget)
 	b.WriteString(injected)
 	if err := os.WriteFile(dest, []byte(b.String()), 0o644); err != nil {
 		return "", err
@@ -316,6 +318,104 @@ func dropMissingRuleSets(data string) string {
 		}
 		slices.Sort(names)
 		log.Printf("配置：忽略引用缺失 rule-provider 的规则: %s", strings.Join(names, ", "))
+	}
+	return strings.Join(kept, "\n")
+}
+
+// flowItemNameRE extracts a name from a flow-style YAML item such as
+// `- {name: "Node A", type: ss, ...}`.
+var flowItemNameRE = regexp.MustCompile(`name:\s*"?([^",}]+)"?`)
+
+// dropMissingRuleTargets removes rules whose policy names a proxy group the
+// profile does not define. A profile can be left with a rule targeting a
+// group that was renamed or removed; mihomo rejects the whole config, which
+// made the app restart the core forever. SUB-RULE targets name sub-rules,
+// not proxies, so those stay.
+func dropMissingRuleTargets(data string) string {
+	lines := strings.Split(data, "\n")
+	known := map[string]bool{
+		"DIRECT": true, "REJECT": true, "REJECT-DROP": true,
+		"PASS": true, "GLOBAL": true, "COMPATIBLE": true,
+	}
+	collect := func(section string) {
+		in := false
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			indent := len(line) - len(strings.TrimLeft(line, " "))
+			if indent == 0 {
+				in = strings.HasPrefix(trimmed, section+":")
+				continue
+			}
+			if !in {
+				continue
+			}
+			item := trimmed
+			if strings.HasPrefix(item, "-") {
+				item = strings.TrimSpace(strings.TrimPrefix(item, "-"))
+			}
+			var name string
+			if strings.HasPrefix(item, "{") {
+				if m := flowItemNameRE.FindStringSubmatch(item); len(m) == 2 {
+					name = m[1]
+				}
+			} else if strings.HasPrefix(item, "name:") {
+				name = strings.TrimSpace(strings.TrimPrefix(item, "name:"))
+			}
+			name = strings.TrimSpace(strings.Trim(name, `"'`))
+			if name != "" {
+				known[name] = true
+			}
+		}
+	}
+	collect("proxies")
+	collect("proxy-groups")
+
+	inRules := false
+	dropped := map[string]bool{}
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if trimmed != "" && indent == 0 {
+			inRules = strings.HasPrefix(trimmed, "rules:")
+		}
+		if inRules && strings.HasPrefix(trimmed, "-") {
+			rule := trimmed
+			if i := strings.Index(rule, " #"); i >= 0 {
+				rule = strings.TrimSpace(rule[:i])
+			}
+			fields := strings.Split(strings.TrimSpace(strings.TrimPrefix(rule, "-")), ",")
+			if len(fields) >= 2 {
+				kind := strings.TrimSpace(fields[0])
+				if !strings.EqualFold(kind, "SUB-RULE") {
+					i := len(fields) - 1
+					for i > 1 {
+						opt := strings.TrimSpace(fields[i])
+						if opt != "no-resolve" && opt != "src" {
+							break
+						}
+						i--
+					}
+					target := strings.Trim(strings.TrimSpace(fields[i]), `"'`)
+					if target != "" && !known[target] && !known[strings.ToUpper(target)] {
+						dropped[target] = true
+						continue
+					}
+				}
+			}
+		}
+		kept = append(kept, line)
+	}
+	if len(dropped) > 0 {
+		names := make([]string, 0, len(dropped))
+		for name := range dropped {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		log.Printf("配置：忽略目标代理组不存在的规则: %s", strings.Join(names, ", "))
 	}
 	return strings.Join(kept, "\n")
 }

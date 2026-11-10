@@ -519,3 +519,33 @@ func TestWriteDNSSectionProxy(t *testing.T) {
 		}
 	}
 }
+
+// TestDropMissingRuleTargets covers rules whose policy names a proxy group
+// that no longer exists. mihomo rejects the whole config, so the app drops
+// those rules; SUB-RULE targets are not proxies and stay.
+func TestDropMissingRuleTargets(t *testing.T) {
+	profile := `proxies:
+  - {name: "Node A", type: ss, server: example.com, port: 443}
+proxy-groups:
+  - name: Proxies
+    type: select
+    proxies: [Node A]
+sub-rules:
+  udp: "AND,((NETWORK,UDP)),REJECT"
+rules:
+ - DOMAIN,missing.example,Claude
+ - IP-CIDR,160.79.104.0/21,Claude,no-resolve
+ - DOMAIN,ok.example,Proxies
+ - MATCH,DIRECT
+ - SUB-RULE,(NETWORK,UDP),udp
+`
+	got := dropMissingRuleTargets(profile)
+	if strings.Contains(got, ",Claude") {
+		t.Errorf("missing-target rule kept:\n%s", got)
+	}
+	for _, want := range []string{"DOMAIN,ok.example,Proxies", "MATCH,DIRECT", "SUB-RULE,(NETWORK,UDP),udp"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
