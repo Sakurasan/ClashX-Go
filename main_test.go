@@ -262,12 +262,17 @@ func TestHumanSpeed(t *testing.T) {
 	}{
 		{512, "   0.5K/s"},
 		{47206, "  46.1K/s"},
-		{999 * 1024, " 999.0K/s"},
-		// Just over the K/s ceiling: %.1f would print a fourth digit, so the
-		// switch must hand it to the M/s line instead.
+		// Two digits keep the decimal, three digits drop it: that is what
+		// holds the read-out to the reserved column.
+		{102348, "  99.9K/s"},
+		{102349, "   100K/s"},
+		{345 * 1024, "   345K/s"},
+		{999 * 1024, "   999K/s"},
+		// Just over the K/s ceiling: the unit steps up rather than spilling
+		// into a fourth digit.
 		{1023949, "   1.0M/s"},
 		{1024 * 1024, "   1.0M/s"},
-		{150 * 1024 * 1024, "   0.1G/s"},
+		{150 * 1024 * 1024, "   150M/s"},
 		{2 * 1024 * 1024 * 1024, "   2.0G/s"},
 	}
 	for _, c := range cases {
@@ -283,7 +288,7 @@ func TestHumanSpeed(t *testing.T) {
 // clips the last digit off the right edge of the status item.
 func TestTraySpeedColumnFitsWidest(t *testing.T) {
 	pad := 2 + (speedSpread+7)/8
-	for _, s := range []string{"999.9K/s", "1.0M/s", "2.0G/s"} {
+	for _, s := range []string{"99.9K/s", "999K/s", "99.9M/s", "999M/s", "99.9G/s", "999G/s"} {
 		img, err := png.Decode(bytes.NewReader(traySpeedIcon(s, s, true)))
 		if err != nil {
 			t.Fatal(err)

@@ -937,21 +937,34 @@ func groupsSignature(groups []*core.GroupView) string {
 	return b.String()
 }
 
-// humanSpeed caps the readout at three digits with a single decimal:
-// 0.0–999.9K/s, 0.1–99.9M/s, then G/s (byte "B" dropped per user preference)
-// — right-padded to a fixed 9-column field so the menu title stays stable.
-// The K/s line keeps its decimal too: without it a 345.8K/s rate reads as a
-// bare "345K/s", and anything under 1K/s shows as "0K/s" for a whole second.
+// speedUnit is one step of the read-out's scale.
+type speedUnit struct {
+	name string
+	div  float64
+}
+
+var speedUnits = []speedUnit{
+	{"K/s", 1024}, {"M/s", 1024 * 1024}, {"G/s", 1024 * 1024 * 1024},
+}
+
+// humanSpeed shows at most three digits per unit and a single decimal only
+// while the integer part is two digits or fewer: 0.5K/s, 46.1K/s, then
+// 100K/s, 345K/s, 9.9M/s, 100M/s (byte "B" dropped per user preference),
+// right-padded to a fixed 9-column field so the menu title stays stable.
+// Small rates keep the decimal so 512B/s does not read as "0K/s", while the
+// three-digit forms stay one character shorter — which is what lets the tray
+// column reserve 92px instead of 101.
 func humanSpeed(n int64) string {
-	kb := n / 1024
-	var s string
-	switch {
-	case float64(n) < 999.95*1024: // so %.1f never spills into four digits
-		s = fmt.Sprintf("%.1fK/s", float64(n)/1024)
-	case kb < 100*1024:
-		s = fmt.Sprintf("%.1fM/s", float64(kb)/1024)
-	default:
-		s = fmt.Sprintf("%.1fG/s", float64(kb)/1024/1024)
+	u := speedUnits[len(speedUnits)-1]
+	for _, cand := range speedUnits {
+		if float64(n) < 999.5*cand.div {
+			u = cand
+			break
+		}
 	}
-	return fmt.Sprintf("%9s", s)
+	m := float64(n) / u.div
+	if m < 99.95 {
+		return fmt.Sprintf("%9s", fmt.Sprintf("%.1f%s", m, u.name))
+	}
+	return fmt.Sprintf("%9s", fmt.Sprintf("%.0f%s", m, u.name))
 }

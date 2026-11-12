@@ -210,11 +210,10 @@ func trayFont() font.Face {
 // traySpeedIcon renders "↑up" above "↓down" with the arrows in one fixed
 // column and the speeds left-aligned just after them. SFNS is proportional,
 // so the %9s padding from humanSpeed is meaningless here — leading spaces
-// are trimmed. The text column is reserved at the widest readout
-// ("888.8K/s", one decimal in every unit), so the icon and arrows never
-// shift in the menu bar as the numbers change; only the digits move inside
-// their column. When neither system proxy nor TUN is active the whole item
-// dims, matching ClashX Meta.
+// are trimmed. The text column is reserved for the widest readout
+// ("99.9M/s"), so the icon and arrows never shift in the menu bar as the
+// numbers change; only the digits move inside their column. When neither
+// system proxy nor TUN is active the whole item dims, matching ClashX Meta.
 func traySpeedIcon(up, down string, active bool) []byte {
 	f := trayFont()
 	up, down = strings.TrimLeft(up, " "), strings.TrimLeft(down, " ")
@@ -224,7 +223,7 @@ func traySpeedIcon(up, down string, active bool) []byte {
 	// margin has to carry it; MeasureString alone would clip the tail.
 	pad := 2 + (speedSpread+7)/8
 	arrowW := max(font.MeasureString(f, "↑").Ceil(), font.MeasureString(f, "↓").Ceil())
-	textW := font.MeasureString(f, widestDigits("888.8K/s")).Ceil()
+	textW := widestSpeedW(f)
 	width := ringW + gap + arrowW + 2 + textW + pad
 	img := image.NewRGBA(image.Rect(0, 0, width, h))
 	textX := ringW + gap + arrowW + 2
@@ -306,4 +305,20 @@ func widestDigits(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// widestSpeedW measures the widest read-out humanSpeed can emit: two digits
+// with a decimal, or three without, in whichever unit is widest. It reads the
+// same unit table as humanSpeed so the reserved column cannot drift from what
+// the formatter actually prints.
+func widestSpeedW(f font.Face) int {
+	w := 0
+	for _, u := range speedUnits {
+		for _, shape := range []string{"99.9", "999"} {
+			if m := font.MeasureString(f, widestDigits(shape+u.name)).Ceil(); m > w {
+				w = m
+			}
+		}
+	}
+	return w
 }
