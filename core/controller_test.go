@@ -1,10 +1,17 @@
 package core
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 )
 
 // TestApplyProxiesKeepsDelayCache guards the bug where the 2s poll rebuilt
@@ -110,4 +117,85 @@ func TestNewControllerReadsGroupOrder(t *testing.T) {
 	if want := []string{"Proxies", "HK"}; !slices.Equal(c.groupOrder, want) {
 		t.Errorf("groupOrder = %v, want %v", c.groupOrder, want)
 	}
+}
+
+// TestTrafficLoopSurvivesFailedStream guards the tray read-out dying for the
+// whole session: the core recreates its controller listener during a config
+// reload, so a reconnect can fail to get any response at all. StreamTraffic
+// returns on that, and trafficLoop used to discard the error — one blip and
+// the rate froze at its last sample until the core restarted.
+func TestTrafficLoopSurvivesFailedStream(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	served := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		n := attempts
+		mu.Unlock()
+		if n == 1 {
+			// The listener is mid-recreation: hang up before any response,
+			// which the HTTP client reports as a transport error.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("no hijacker")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("no hijacker")
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		// One sample, then hold the stream open like the real core does.
+		_, err = fmt.Fprint(conn,
+			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"up\":131,\"down\":357}\n")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		select {
+		case served <- struct{}{}:
+		default:
+		}
+		time.Sleep(2 * time.Second)
+	}))
+	t.Cleanup(srv.Close)
+
+	mgr, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewController(mgr, DefaultConfig())
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.client.Base = "http://" + u.Host
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.trafficLoop(ctx)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.State().Traffic.Up == 131 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("traffic never resumed after a failed stream: %+v", c.State().Traffic)
 }

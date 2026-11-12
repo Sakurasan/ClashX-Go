@@ -210,17 +210,21 @@ func trayFont() font.Face {
 // traySpeedIcon renders "↑up" above "↓down" with the arrows in one fixed
 // column and the speeds left-aligned just after them. SFNS is proportional,
 // so the %9s padding from humanSpeed is meaningless here — leading spaces
-// are trimmed. The text column is reserved at the widest 3-digit readout
-// ("88.8M/s"), so the icon and arrows never shift in the menu bar as the
-// numbers change; only the digits move inside their column. When neither
-// system proxy nor TUN is active the whole item dims, matching ClashX Meta.
+// are trimmed. The text column is reserved at the widest readout
+// ("888.8K/s", one decimal in every unit), so the icon and arrows never
+// shift in the menu bar as the numbers change; only the digits move inside
+// their column. When neither system proxy nor TUN is active the whole item
+// dims, matching ClashX Meta.
 func traySpeedIcon(up, down string, active bool) []byte {
 	f := trayFont()
 	up, down = strings.TrimLeft(up, " "), strings.TrimLeft(down, " ")
 	const h = 48 // full menu-bar height at 2x, no vertical margin
-	ringW, gap, pad := 46, 2, 2
+	ringW, gap := 46, 2
+	// The dilation pushes ink past the last glyph's advance, so the right
+	// margin has to carry it; MeasureString alone would clip the tail.
+	pad := 2 + (speedSpread+7)/8
 	arrowW := max(font.MeasureString(f, "↑").Ceil(), font.MeasureString(f, "↓").Ceil())
-	textW := font.MeasureString(f, widestDigits("88.8M/s")).Ceil()
+	textW := font.MeasureString(f, widestDigits("888.8K/s")).Ceil()
 	width := ringW + gap + arrowW + 2 + textW + pad
 	img := image.NewRGBA(image.Rect(0, 0, width, h))
 	textX := ringW + gap + arrowW + 2
@@ -231,39 +235,75 @@ func traySpeedIcon(up, down string, active bool) []byte {
 		alpha = 110
 	}
 	drawGlyph(img, image.Rect(0, 0, ringW, h), color.NRGBA{A: alpha})
-	ink := image.NewUniform(color.NRGBA{A: alpha})
-	drawTrayText(img, f, ink, "↑", ringW+gap+arrowW, 20)
-	drawTrayText(img, f, ink, "↓", ringW+gap+arrowW, 44)
-	drawTrayTextLeft(img, f, ink, up, textX, 20)
-	drawTrayTextLeft(img, f, ink, down, textX, 44)
+
+	// The read-out is struck into an alpha layer first and tinted once at
+	// the end: over-drawing the ink would double its alpha and break the
+	// dimmed state.
+	mask := image.NewAlpha(img.Bounds())
+	solid := &image.Uniform{C: color.NRGBA{R: 255, G: 255, B: 255, A: 255}}
+	strike := func(s string, left, baseline int) {
+		base := fixed.Point26_6{X: fixed.Int26_6(left << 6), Y: fixed.Int26_6(baseline << 6)}
+		for _, o := range speedSpreadOffsets() {
+			d := &font.Drawer{Dst: mask, Src: solid, Face: f, Dot: base.Add(o)}
+			d.DrawString(s)
+		}
+	}
+	right := func(s string, right, baseline int) {
+		strike(s, right-font.MeasureString(f, s).Ceil(), baseline)
+	}
+	right("↑", ringW+gap+arrowW, 20)
+	right("↓", ringW+gap+arrowW, 44)
+	strike(up, textX, 20)
+	strike(down, textX, 44)
+	draw.DrawMask(img, img.Bounds(), &image.Uniform{C: color.NRGBA{A: alpha}}, image.Point{},
+		mask, mask.Bounds().Min, draw.Over)
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	return b.Bytes()
 }
 
-// widestDigits rewrites every digit as "8" (SFNS's widest numeral) so the
-// measured width is the ceiling for any value of the same shape.
+// speedSpread is how far the glyph coverage is dilated, in eighths of a
+// canvas pixel: the bitmap is 2x, so eight eighths is one canvas pixel and
+// half a menu-bar point. SFNS.ttf is a variable font and x/image can set its
+// size but not its weight axis, and macOS ships no static SFNS-Bold, so the
+// read-out gets its extra weight this way. The face is unhinted, so a half
+// pixel lands where it is put instead of snapping to the grid.
+const speedSpread = 2
+
+// speedSpreadOffsets are the sub-pixel strikes that dilate a glyph by
+// speedSpread eighths of a pixel on both axes.
+func speedSpreadOffsets() []fixed.Point26_6 {
+	if speedSpread <= 0 {
+		return []fixed.Point26_6{{X: 0, Y: 0}}
+	}
+	step := fixed.Int26_6(speedSpread * 8) // eighths of a pixel, in 1/64s
+	return []fixed.Point26_6{
+		{X: 0, Y: 0}, {X: step, Y: 0}, {X: 0, Y: step}, {X: step, Y: step},
+	}
+}
+
+// widestDigit is the numeral SFNS gives the most advance at the read-out
+// size. It is 9, not the usual guess of 8, so it is measured once rather
+// than assumed.
+var widestDigit = sync.OnceValue(func() byte {
+	f := trayFont()
+	best, widest := font.MeasureString(f, "0"), byte('0')
+	for d := byte('1'); d <= '9'; d++ {
+		if w := font.MeasureString(f, string(d)); w > best {
+			best, widest = w, d
+		}
+	}
+	return widest
+})
+
+// widestDigits rewrites every digit as the widest numeral, so the measured
+// width is the ceiling for any value of the same shape.
 func widestDigits(s string) string {
 	b := []byte(s)
 	for i, c := range b {
 		if c >= '0' && c <= '9' {
-			b[i] = '8'
+			b[i] = widestDigit()
 		}
 	}
 	return string(b)
-}
-
-func drawTrayText(dst *image.RGBA, f font.Face, src *image.Uniform, s string, right, baseline int) {
-	w := font.MeasureString(f, s).Ceil()
-	drawTrayTextLeft(dst, f, src, s, right-w, baseline)
-}
-
-func drawTrayTextLeft(dst *image.RGBA, f font.Face, src *image.Uniform, s string, left, baseline int) {
-	d := &font.Drawer{
-		Dst:  dst,
-		Src:  src,
-		Face: f,
-		Dot:  fixed.P(left, baseline),
-	}
-	d.DrawString(s)
 }

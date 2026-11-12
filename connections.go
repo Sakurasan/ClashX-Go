@@ -213,7 +213,7 @@ func (p *panelApp) activeConnsView(c *ui.Context) {
 					compactBytes(conn.Download), compactBytes(conn.Upload))).FontSize(11).SingleLine()
 			}
 		},
-	}).Grow(1).KeepScrollbars(true).Submitted()
+	}).Grow(1).KeepScrollbars(true).ScrollbarAxes(false, true).Submitted()
 	if submitted && p.connSel >= 0 && p.connSel < len(rows) {
 		conn := rows[p.connSel]
 		go p.showConnDetail(conn)
@@ -256,7 +256,7 @@ func (p *panelApp) rulesView(c *ui.Context) {
 				ui.Text(c, orDash(rule.Proxy)).SingleLine()
 			}
 		},
-	}).Grow(1).KeepScrollbars(true)
+	}).Grow(1).KeepScrollbars(true).ScrollbarAxes(false, true)
 }
 
 // filteredConnections applies the search box to host, process, rule and

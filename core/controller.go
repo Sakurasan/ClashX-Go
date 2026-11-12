@@ -242,11 +242,33 @@ func (c *Controller) pollLoop(ctx context.Context) {
 	}
 }
 
-// trafficLoop streams /traffic and updates the sample shown in the UI.
+// trafficLoop streams /traffic and updates the sample shown in the UI. The
+// stream is meant to stay open for the whole run, so a dropped stream is
+// retried instead of ending the read-out: StreamTraffic returns on any
+// transport error, and until this loop retried a single failure left the
+// tray rate frozen at its last sample until the core restarted.
 func (c *Controller) trafficLoop(ctx context.Context) {
-	_ = c.client.StreamTraffic(ctx, func(t Traffic) {
-		c.setState(func(s *State) { s.Traffic = t })
-	})
+	backoff := time.Second
+	for ctx.Err() == nil {
+		err := c.client.StreamTraffic(ctx, func(t Traffic) {
+			backoff = time.Second
+			c.setState(func(s *State) { s.Traffic = t })
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("traffic stream: %v (retry in %s)", err, backoff)
+		// Show no rate rather than a stale one while the stream is down.
+		c.setState(func(s *State) { s.Traffic = Traffic{} })
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 10*time.Second {
+			backoff *= 2
+		}
+	}
 }
 
 // SelectProxy chooses a member of a group and updates the local state.

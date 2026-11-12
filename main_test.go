@@ -260,9 +260,12 @@ func TestHumanSpeed(t *testing.T) {
 		n    int64
 		want string
 	}{
-		{512, "     0K/s"},
-		{47206, "    46K/s"},
-		{999 * 1024, "   999K/s"},
+		{512, "   0.5K/s"},
+		{47206, "  46.1K/s"},
+		{999 * 1024, " 999.0K/s"},
+		// Just over the K/s ceiling: %.1f would print a fourth digit, so the
+		// switch must hand it to the M/s line instead.
+		{1023949, "   1.0M/s"},
 		{1024 * 1024, "   1.0M/s"},
 		{150 * 1024 * 1024, "   0.1G/s"},
 		{2 * 1024 * 1024 * 1024, "   2.0G/s"},
@@ -270,6 +273,28 @@ func TestHumanSpeed(t *testing.T) {
 	for _, c := range cases {
 		if got := humanSpeed(c.n); got != c.want {
 			t.Errorf("humanSpeed(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+// TestTraySpeedColumnFitsWidest guards the reserved text column against the
+// readout's widest form: with one decimal in every unit, "999.9K/s" is a
+// character wider than the old "999K/s", and a column that is too narrow
+// clips the last digit off the right edge of the status item.
+func TestTraySpeedColumnFitsWidest(t *testing.T) {
+	pad := 2 + (speedSpread+7)/8
+	for _, s := range []string{"999.9K/s", "1.0M/s", "2.0G/s"} {
+		img, err := png.Decode(bytes.NewReader(traySpeedIcon(s, s, true)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := img.Bounds()
+		for x := b.Max.X - pad; x < b.Max.X; x++ {
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				if _, _, _, a := img.At(x, y).RGBA(); a>>8 > 0 {
+					t.Fatalf("%q: ink in the right pad at x=%d (width %d)", s, x, b.Dx())
+				}
+			}
 		}
 	}
 }

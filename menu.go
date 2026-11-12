@@ -938,14 +938,16 @@ func groupsSignature(groups []*core.GroupView) string {
 }
 
 // humanSpeed caps the readout at three digits with a single decimal:
-// 0–999K/s, 0.1–99.9M/s, then G/s (byte "B" dropped per user preference) —
-// right-padded to a fixed 9-column field so the menu title stays stable.
+// 0.0–999.9K/s, 0.1–99.9M/s, then G/s (byte "B" dropped per user preference)
+// — right-padded to a fixed 9-column field so the menu title stays stable.
+// The K/s line keeps its decimal too: without it a 345.8K/s rate reads as a
+// bare "345K/s", and anything under 1K/s shows as "0K/s" for a whole second.
 func humanSpeed(n int64) string {
 	kb := n / 1024
 	var s string
 	switch {
-	case kb < 1000:
-		s = fmt.Sprintf("%dK/s", kb)
+	case float64(n) < 999.95*1024: // so %.1f never spills into four digits
+		s = fmt.Sprintf("%.1fK/s", float64(n)/1024)
 	case kb < 100*1024:
 		s = fmt.Sprintf("%.1fM/s", float64(kb)/1024)
 	default:

@@ -416,11 +416,12 @@ type Traffic struct {
 // StreamTraffic reads the line-delimited /traffic stream, sending each
 // sample to fn until ctx is cancelled. It reconnects automatically.
 func (c *Client) StreamTraffic(ctx context.Context, fn func(Traffic)) error {
+	stream := c.streamHTTP()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		resp, err := c.do(ctx, http.MethodGet, "/traffic", nil)
+		resp, err := c.doWith(ctx, stream, http.MethodGet, "/traffic", nil)
 		if err != nil {
 			return err
 		}
@@ -443,6 +444,18 @@ func (c *Client) StreamTraffic(ctx context.Context, fn func(Traffic)) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// streamHTTP is the client for long-lived streams such as /traffic. The
+// poll client caps requests at 5s, which is right for a status call but
+// would cancel an open stream every few seconds: the app would then pay a
+// reconnect every 5s, and every reconnect is a chance to lose the rate
+// read-out. Same transport (so the Unix socket keeps working), no deadline.
+func (c *Client) streamHTTP() *http.Client {
+	if c.HTTP == nil {
+		return &http.Client{}
+	}
+	return &http.Client{Transport: c.HTTP.Transport}
 }
 
 // CloseConnection closes one active connection by ID.
