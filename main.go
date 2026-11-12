@@ -75,6 +75,10 @@ func main() {
 		a.onSecondInstance()
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
+	// A window that keeps itself open cancels the quit. Without clearing the
+	// flag the app would go on running with every loop that checks a.quitting
+	// stopped, i.e. alive but deaf.
+	mygo.App.OnQuitCanceled(func() { a.quitting = false })
 	mygo.App.WhenReady(a.ready)
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
@@ -207,6 +211,14 @@ func (a *app) ready() {
 		a.tray.Destroy()
 		log.Printf("退出：清理完成")
 	})
+
+	// Without this, macOS puts the app into App Nap within a minute of it
+	// having no visible window: timers coalesce to roughly one per minute
+	// and I/O is throttled, so the tray rate, the core state poll and the
+	// network/SSID loops go stale while proxying quietly in the menu bar.
+	// This keeps the app at full speed out of sight and still lets the
+	// computer sleep.
+	mygo.Power.KeepRunning(T("ClashX Go 正在代理"))
 
 	// Boot the core in the background on launch.
 	go a.startCore()

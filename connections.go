@@ -201,11 +201,13 @@ func (p *panelApp) activeConnsView(c *ui.Context) {
 			conn := rows[row]
 			switch col {
 			case 0:
-				ui.Text(c, connHost(conn)).SingleLine()
+				// Middle ellipsis keeps the port: "api.example.com:443" cut at
+				// the end says nothing about where the connection went.
+				ui.Text(c, connHost(conn)).SingleLine().TruncateMiddle()
 			case 1:
-				ui.Text(c, connRule(conn)).SingleLine()
+				ui.Text(c, connRule(conn)).SingleLine().TruncateMiddle()
 			case 2:
-				ui.Text(c, connChain(conn)).SingleLine()
+				ui.Text(c, connChain(conn)).SingleLine().TruncateMiddle()
 			default:
 				ui.Text(c, fmt.Sprintf("↓%s ↑%s",
 					compactBytes(conn.Download), compactBytes(conn.Upload))).FontSize(11).SingleLine()
@@ -249,7 +251,7 @@ func (p *panelApp) rulesView(c *ui.Context) {
 			case 0:
 				ui.Text(c, rule.Type).SingleLine()
 			case 1:
-				ui.Text(c, orDash(rule.Payload)).SingleLine()
+				ui.Text(c, orDash(rule.Payload)).SingleLine().TruncateMiddle()
 			default:
 				ui.Text(c, orDash(rule.Proxy)).SingleLine()
 			}

@@ -246,7 +246,8 @@ func (p *panelApp) debugPane(c *ui.Context) {
 	a := p.app
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
 		settingsGroup(c, T("日志"), func() {
-			ui.Text(c, a.ctrl.Manager().LogPath()).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			ui.Text(c, a.ctrl.Manager().LogPath()).FontSize(11).TextColor(t.TextMuted).SingleLine().
+				TruncateMiddle()
 			ui.Row(c).Gap(8).Children(func() {
 				settingsAction(c, T("打开日志"), func() {
 					_ = mygo.Shell.OpenPath(a.ctrl.Manager().LogPath())

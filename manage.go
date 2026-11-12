@@ -54,7 +54,7 @@ func (m *manageWindow) view(c *ui.Context) {
 			p := profiles[row]
 			switch col {
 			case 0:
-				ui.Text(c, p.URL).SingleLine()
+				ui.Text(c, p.URL).SingleLine().TruncateMiddle()
 			case 1:
 				ui.Text(c, p.Name).SingleLine()
 			case 2:
