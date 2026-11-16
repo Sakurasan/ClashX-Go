@@ -135,13 +135,27 @@ func TestTrayMenu(t *testing.T) {
 	if !ge.members["HK"].IsChecked() || ge.members["US"].IsChecked() {
 		t.Error("initial member checks wrong")
 	}
-	if got := ge.members["US"].Label; got != "US  ❌  失败" {
+	if got := ge.members["US"].Label; got != "US" {
 		t.Errorf("timeout member label = %q", got)
+	}
+	if got := ge.members["US"].Badge; got != "失败" {
+		t.Errorf("timeout member badge = %q", got)
+	}
+	if got := ge.members["US"].BadgeColor; got != badgeRed {
+		t.Errorf("timeout badge colour = %q, want %q", got, badgeRed)
+	}
+	if got := ge.members["HK"].Badge; got != "" {
+		t.Errorf("untested member badge = %q, want none", got)
+	}
+	// ClashX Meta keeps the menu open while nodes are tried one after
+	// another; this is what replaced the reopen-the-tray-menu workaround.
+	if !ge.members["US"].KeepOpen || !ge.members["HK"].KeepOpen {
+		t.Error("member items must stay the menu open")
 	}
 
 	s2 := core.State{Mode: "global", Groups: []*core.GroupView{{
 		Name: "PROXY", Current: "US", Members: []string{"HK", "US"},
-		Delays: map[string]int{"US": 210},
+		Delays: map[string]int{"US": 210, "HK": 450},
 	}}}
 	m.refresh(s2)
 	if got := m.modeItem.Label; got != "出站模式 (全局)" {
@@ -150,8 +164,20 @@ func TestTrayMenu(t *testing.T) {
 	if !ge.members["US"].IsChecked() || ge.members["HK"].IsChecked() {
 		t.Error("member checks not refreshed")
 	}
-	if got := ge.members["US"].Label; got != "US  ✅  210 ms" {
+	if got := ge.members["US"].Badge; got != "210 ms" {
+		t.Errorf("delay badge = %q", got)
+	}
+	if got := ge.members["US"].BadgeColor; got != badgeGreen {
+		t.Errorf("fast badge colour = %q, want %q", got, badgeGreen)
+	}
+	if got := ge.members["US"].Label; got != "US" {
 		t.Errorf("delay label = %q", got)
+	}
+	if got := ge.members["HK"].Badge; got != "450 ms" {
+		t.Errorf("slow badge = %q", got)
+	}
+	if got := ge.members["HK"].BadgeColor; got != badgeAmber {
+		t.Errorf("slow badge colour = %q, want %q", got, badgeAmber)
 	}
 	if got := ge.item.Label; got != "PROXY  (US)" {
 		t.Errorf("group label = %q", got)

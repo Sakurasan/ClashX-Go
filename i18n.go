@@ -64,6 +64,7 @@ func T(zh string) string {
 var en = map[string]string{
 	// Tray menu
 	"出站模式":          "Outbound Mode",
+	"失败":            "fail",
 	"规则":            "Rule",
 	"全局":            "Global",
 	"直连":            "Direct",

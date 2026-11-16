@@ -56,7 +56,7 @@ type groupEntry struct {
 	name    string
 	item    *mygo.MenuItem
 	members map[string]*mygo.MenuItem
-	labels  map[string]string // last rendered label per member, to skip no-op updates
+	badges  map[string]speedBadge // last rendered badge per member, to skip no-op updates
 	current string
 }
 
@@ -162,7 +162,7 @@ func (m *trayMenu) build(s core.State) {
 	m.lanItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setLANToggle(it) }
 	items = append(items, m.loginItem, m.speedItem, m.lanItem, mygo.Separator())
 
-	testAll := &mygo.MenuItem{Label: T("延迟测速"), Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups(); a.reopenMenu() }}
+	testAll := &mygo.MenuItem{Label: T("延迟测速"), Accelerator: "Cmd+T", KeepOpen: true, Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups() }}
 	console := &mygo.MenuItem{Label: T("控制台"), Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.openConsole() }}
 	items = append(items, testAll, console, mygo.Separator())
 
@@ -186,22 +186,29 @@ func (m *trayMenu) build(s core.State) {
 // groupItem renders one policy group as a top-level item whose submenu holds
 // a delay-test header and the member radio items.
 func (m *trayMenu) groupItem(g *core.GroupView) *mygo.MenuItem {
-	ge := &groupEntry{name: g.Name, members: map[string]*mygo.MenuItem{}, labels: map[string]string{}, current: g.Current}
+	ge := &groupEntry{name: g.Name, members: map[string]*mygo.MenuItem{}, badges: map[string]speedBadge{}, current: g.Current}
 	group := g.Name
 	sub := []*mygo.MenuItem{
-		{Label: T("延迟测速"), Click: func(*mygo.MenuItem, *mygo.Window) { go m.app.testGroup(group); m.app.reopenMenu() }},
+		{Label: T("延迟测速"), KeepOpen: true, Click: func(*mygo.MenuItem, *mygo.Window) { go m.app.testGroup(group) }},
 		mygo.Separator(),
 	}
 	for _, name := range g.Members {
+		badge := memberBadge(name, g.Delays)
 		it := &mygo.MenuItem{
-			Label:   memberLabel(name, g.Delays),
-			Type:    mygo.MenuItemRadio,
-			Checked: name == g.Current,
+			Label:      name,
+			Badge:      badge.text,
+			BadgeShape: mygo.BadgeShapeSquare,
+			BadgeColor: badge.color,
+			Type:       mygo.MenuItemRadio,
+			Checked:    name == g.Current,
+			// ClashX Meta lets the user try nodes one after another without
+			// the menu closing between picks; MyGo 0.9.2 does that natively.
+			KeepOpen: true,
 		}
 		name := name
 		it.Click = func(*mygo.MenuItem, *mygo.Window) { m.app.selectProxy(group, name) }
 		ge.members[name] = it
-		ge.labels[name] = it.Label
+		ge.badges[name] = badge
 		sub = append(sub, it)
 	}
 	ge.item = &mygo.MenuItem{Label: groupLabel(g.Name, g.Current), Submenu: sub}
@@ -261,9 +268,10 @@ func (m *trayMenu) refresh(s core.State) {
 			}
 		}
 		for name, it := range ge.members {
-			if want := memberLabel(name, g.Delays); want != ge.labels[name] {
-				ge.labels[name] = want
-				it.SetLabel(want)
+			if want := memberBadge(name, g.Delays); want != ge.badges[name] {
+				ge.badges[name] = want
+				it.SetBadge(want.text)
+				it.SetBadgeColor(want.color)
 			}
 		}
 	}
@@ -752,17 +760,6 @@ func (m *trayMenu) rebuild() {
 	m.app.tray.SetMenu(m.menu)
 }
 
-// reopenMenu re-pops the tray menu after an action ClashX keeps the menu
-// open for (延迟测速): NSMenu dismisses on any click, so we show it again
-// on the next main-loop pass while the tests run in the background.
-func (a *app) reopenMenu() {
-	a.win.Update(func() {
-		if b := a.tray.Bounds(); b.Width > 0 && b.Height > 0 {
-			a.tray.PopUpMenu()
-		}
-	})
-}
-
 // openConsole shows the core's built-in dashboard (zashboard served at
 // /ui by external-ui), falling back to the panel overview when the
 // dashboard assets are not installed. ClashX Meta's own ui/ bundle counts.
@@ -890,20 +887,35 @@ func groupLabel(name, current string) string {
 	return name + "  (" + current + ")"
 }
 
-// memberLabel renders a node with a ClashX-style delay badge. Native menus
-// cannot draw the coloured pill, so small text-grade symbols stand in:
-// ✅ ≤300ms, ⚠️ slower, ❌ for failures.
-func memberLabel(name string, delays map[string]int) string {
+// speedBadge is one node's latency badge: the text sits in the menu's badge
+// column, in monospaced digits, over the colour the latency class calls for.
+// An empty text means "not tested yet" and draws nothing; an empty colour
+// keeps the system's subtle background.
+type speedBadge struct {
+	text  string
+	color string
+}
+
+// Latency classes, as picked for the menu demo: green up to 300ms, amber
+// slower, red for a node that did not answer.
+const (
+	badgeGreen  = "#34c759"
+	badgeAmber  = "#ffab00"
+	badgeRed    = "#ff453a"
+	badgeSlowMS = 300
+)
+
+func memberBadge(name string, delays map[string]int) speedBadge {
 	d, ok := delays[name]
 	switch {
 	case !ok || d == 0:
-		return name
+		return speedBadge{}
 	case d < 0:
-		return name + "  ❌  失败"
-	case d <= 300:
-		return fmt.Sprintf("%s  ✅ %4d ms", name, d)
+		return speedBadge{text: T("失败"), color: badgeRed}
+	case d <= badgeSlowMS:
+		return speedBadge{text: fmt.Sprintf("%d ms", d), color: badgeGreen}
 	default:
-		return fmt.Sprintf("%s  ⚠️ %4d ms", name, d)
+		return speedBadge{text: fmt.Sprintf("%d ms", d), color: badgeAmber}
 	}
 }
 
