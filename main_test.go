@@ -131,6 +131,13 @@ func TestTrayMenu(t *testing.T) {
 	if got := m.modeItem.Label; got != "出站模式 (规则)" {
 		t.Errorf("mode label = %q", got)
 	}
+	// The all-groups test sits among system rows: drawn as a MyGo view it
+	// would sit a few points right and lose its ⌘T hint.
+	if it := m.menu.ItemByID(testAllID); it == nil {
+		t.Error("no top-level test item")
+	} else if it.KeepOpen || it.Accelerator == "" {
+		t.Errorf("top-level test item: KeepOpen=%v Accelerator=%q", it.KeepOpen, it.Accelerator)
+	}
 	ge := m.groups[0]
 	if !ge.members["HK"].IsChecked() || ge.members["US"].IsChecked() {
 		t.Error("initial member checks wrong")

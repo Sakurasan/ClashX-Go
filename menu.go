@@ -162,7 +162,11 @@ func (m *trayMenu) build(s core.State) {
 	m.lanItem.Click = func(it *mygo.MenuItem, _ *mygo.Window) { a.setLANToggle(it) }
 	items = append(items, m.loginItem, m.speedItem, m.lanItem, mygo.Separator())
 
-	testAll := &mygo.MenuItem{Label: T("延迟测速"), Accelerator: "Cmd+T", KeepOpen: true, Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups() }}
+	// No KeepOpen here: MyGo draws such a row as its own view, which puts the
+	// label a few points right of the system titles around it and drops the
+	// ⌘T hint. The group submenu keeps it: every row there is a view, so they
+	// line up, and that is where the results are watched.
+	testAll := &mygo.MenuItem{ID: testAllID, Label: T("延迟测速"), Accelerator: "Cmd+T", Click: func(*mygo.MenuItem, *mygo.Window) { a.testAllGroups() }}
 	console := &mygo.MenuItem{Label: T("控制台"), Accelerator: "Cmd+D", Click: func(*mygo.MenuItem, *mygo.Window) { a.openConsole() }}
 	items = append(items, testAll, console, mygo.Separator())
 
@@ -182,6 +186,10 @@ func (m *trayMenu) build(s core.State) {
 	m.subInfo = subInfoLabel(s)
 	m.setSpeedTitle(s)
 }
+
+// testAllID finds the top-level latency-test item, which the menu test
+// checks stays a system row (label column and ⌘T hint).
+const testAllID = "test-all"
 
 // groupItem renders one policy group as a top-level item whose submenu holds
 // a delay-test header and the member radio items.
