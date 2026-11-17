@@ -79,8 +79,11 @@ type settings struct {
 	suspendSSIDs   string
 	noNotify       bool
 	autoCheckUpd   bool
-	appRules       []appRoutingRule
-	selections     []savedSelection
+	// updateChannel is the update feed the app follows: "stable" (default)
+	// or "nightly", the daily builds of main.
+	updateChannel string
+	appRules      []appRoutingRule
+	selections    []savedSelection
 	// shortcuts maps action id -> accelerator (e.g. "CmdOrCtrl+Shift+P").
 	shortcuts map[string]string
 	// lang is the interface language: "", "zh" or "en"; empty follows the
@@ -120,6 +123,7 @@ type settingsJSON struct {
 	SuspendSSIDs   string                `json:"suspendSSIDs,omitempty"`
 	NoNotify       bool                  `json:"noNotify,omitempty"`
 	AutoCheckUpd   *bool                 `json:"autoCheckUpdate,omitempty"`
+	UpdateChannel  string                `json:"updateChannel,omitempty"`
 	AppRules       []appRoutingRule      `json:"appRules,omitempty"`
 	Selections     []savedSelection      `json:"selections,omitempty"`
 	Shortcuts      map[string]string     `json:"shortcuts,omitempty"`
@@ -143,6 +147,7 @@ func loadSettings(dir string) *settings {
 		proxyBypass:    defaultProxyBypass,
 		shortcuts:      map[string]string{},
 		autoCheckUpd:   true,
+		updateChannel:  "stable",
 		blockQUIC:      true,
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "app.json"))
@@ -185,6 +190,11 @@ func loadSettings(dir string) *settings {
 	s.noNotify = w.NoNotify
 	if w.AutoCheckUpd != nil {
 		s.autoCheckUpd = *w.AutoCheckUpd
+	}
+	// Anything but "nightly" is the stable channel: a stray value from a
+	// hand-edited app.json must not turn into an unknown channel.
+	if w.UpdateChannel == "nightly" {
+		s.updateChannel = "nightly"
 	}
 	for i := range w.AppRules {
 		if !strings.EqualFold(w.AppRules[i].Target, "proxy") {
@@ -262,6 +272,7 @@ func saveSettings(dir string, s *settings) {
 		SuspendSSIDs:   s.suspendSSIDs,
 		NoNotify:       s.noNotify,
 		AutoCheckUpd:   &s.autoCheckUpd,
+		UpdateChannel:  s.updateChannel,
 		AppRules:       s.appRules,
 		Selections:     s.selections,
 		Shortcuts:      s.shortcuts,
@@ -313,6 +324,17 @@ func (p *panelApp) settingsPane(c *ui.Context) {
 			settingsSwitch(c, T("自动检查更新"), &s.autoCheckUpd, func() {
 				saveSettings(coreDir(), p.app.settings)
 			})
+			settingsRow(c, T("更新渠道"), func() {
+				ui.Row(c).Padding(2).Radius(7).Background(t.Text.Alpha(0.08)).Children(func() {
+					choiceSegment(c, T("稳定版"), s.updateChannel != "nightly", func() {
+						p.app.setUpdateChannel("stable")
+					})
+					choiceSegment(c, "Nightly", s.updateChannel == "nightly", func() {
+						p.app.setUpdateChannel("nightly")
+					})
+				})
+			})
+			ui.Text(c, T("Nightly 为 main 分支的每日自动构建，可能不稳定。")).FontSize(11).TextColor(t.TextMuted)
 		})
 		settingsGroup(c, T("Clash 设置"), func() {
 			settingsSwitch(c, T("启用 IPv6"), &s.ipv6, func() {

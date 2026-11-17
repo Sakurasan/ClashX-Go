@@ -36,10 +36,31 @@ jobs:
           go tool mygo vet .
           go test ./...
 
+      - name: Stamp nightly version
+        # The nightly must be a versioned prerelease the updater can find:
+        # its feed picks the highest v-prefixed tag, and update.Compare
+        # orders 0.2.18 < 0.2.19-nightly.<date> < 0.2.19, so bumping the
+        # patch and suffixing -nightly.<UTC date> lands a nightly after the
+        # current stable and before the next one. The rewrite stays in this
+        # checkout; only the release carries it.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python3 - <<'PY'
+          import datetime, json, pathlib
+          p = pathlib.Path("mygo.json")
+          c = json.loads(p.read_text(encoding="utf-8"))
+          major, minor, patch = (int(x) for x in c["version"].split(".")[:3])
+          c["version"] = f"{major}.{minor}.{patch + 1}-nightly.{datetime.datetime.now(datetime.UTC):%Y%m%d}"
+          p.write_text(json.dumps(c, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          print("nightly version:", c["version"])
+          PY
+
       - name: Build universal app
         env:
-          # Only tagged builds sign the update feed; nightlies stay unsigned.
-          MYGO_UPDATER_PRIVATE_KEY: ${{ github.ref_type == 'tag' && secrets.MYGO_UPDATER_PRIVATE_KEY || '' }}
+          # Every published build signs its update feed (nightlies too, so
+          # the Nightly channel can install them); pull requests stay
+          # unsigned.
+          MYGO_UPDATER_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.MYGO_UPDATER_PRIVATE_KEY || '' }}
         run: go tool mygo build -platform darwin/universal
 
       # The release is universal; publish the same signed manifest under the
@@ -47,7 +68,7 @@ jobs:
       # `mygo build` on a developer machine) then find a feed and install
       # the universal archive instead of a 404.
       - name: Add per-arch update feeds
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         run: |
           cp build/darwin-universal/update-darwin-universal.json build/darwin-universal/update-darwin-amd64.json
           cp build/darwin-universal/update-darwin-universal.json build/darwin-universal/update-darwin-arm64.json
@@ -68,36 +89,44 @@ jobs:
           mkdir -p dist
           cp build/darwin-universal/*.dmg "dist/ClashX Go ${version}.dmg"
 
-      # The Nightly is a rolling release: drop every DMG it accumulated,
-      # then let the publish step upload the current version's single one.
-      - name: Clean old nightly DMGs
+      # Versioned nightlies replace the previous nightly release entirely:
+      # the updater's prerelease feed resolves the highest v-prefixed tag,
+      # and stale v*-nightly.* releases (or the old rolling `nightly` one)
+      # would either shadow the newest build or just clutter the list.
+      - name: Remove previous nightly releases
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          assets=$(gh release view nightly --json assets --jq '.assets[].name' 2>/dev/null || true)
-          printf '%s\n' "$assets" | while IFS= read -r name; do
-            [ -n "$name" ] || continue
-            case "$name" in
-              *.dmg) gh release delete-asset nightly "$name" --yes || true ;;
+          tags=$(gh api repos/"$GITHUB_REPOSITORY"/releases --paginate --jq '.[].tag_name')
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            case "$tag" in
+              v*-nightly.*|nightly) gh release delete "$tag" --yes --cleanup-tag || true ;;
             esac
-          done
+          done <<EOF
+          $tags
+          EOF
 
       - name: Publish nightly
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nightly
-          name: Nightly
+          tag_name: v${{ env.VERSION }}
+          name: Nightly ${{ env.VERSION }}
           prerelease: true
-          # Never the "latest" release: the updater's feed ignores prereleases.
+          # Never the "latest" release: the stable feed ignores prereleases.
           make_latest: "false"
           body: |
-            Automated build of `main` at ${{ github.sha }}.
+            Automated nightly build of `main` at ${{ github.sha }}.
+
+            已通过「更新渠道: Nightly」自动更新安装；此页面供手动下载。
           files: |
             dist/ClashX Go *.dmg
             build/darwin-universal/*.tar.gz
             build/darwin-universal/*.zip
+            build/darwin-universal/update-*.json
+            build/darwin-universal/*.delta
           fail_on_unmatched_files: false
 
       # The release page carries the curated notes from CHANGELOG.md: the

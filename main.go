@@ -120,6 +120,9 @@ func (a *app) ready() {
 	}
 	a.settings = loadSettings(dir)
 	a.coreLAN = a.settings.allowLAN
+	// The updater offers prereleases only when told to (mygo resets it at
+	// launch), so pick the saved channel before any check can run.
+	applyUpdateChannel(a.settings)
 	uiLang = resolveLang(a.settings.lang)
 	a.activeAPI = parsePort(a.settings.controller, core.DefaultConfig().ControllerPort)
 	log.Printf("启动：tun=%t systemProxy=%t profile=%q config=%q",

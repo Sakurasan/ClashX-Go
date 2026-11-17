@@ -25,6 +25,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	s.tunDNS = "8.8.8.8"
 	s.lang = "en"
 	s.mode = "global"
+	s.updateChannel = "nightly"
 	s.blockQUIC = false
 	s.dnsProxy = true
 	s.appRules = []appRoutingRule{{Name: "Telegram", Process: "Telegram", Path: "/Applications/Telegram.app", Target: "proxy"}}
@@ -58,6 +59,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if got.mode != "global" {
 		t.Errorf("mode = %q, want global", got.mode)
 	}
+	if got.updateChannel != "nightly" {
+		t.Errorf("updateChannel = %q, want nightly", got.updateChannel)
+	}
 	// Default-true bools must persist as false through the pointer mirror.
 	if got.blockQUIC {
 		t.Errorf("blockQUIC = true, want the persisted false")
@@ -76,6 +80,23 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("profiles")) || !bytes.Contains(data, []byte("activeProfile")) {
 		t.Errorf("app.json missing profiles keys:\n%s", data)
+	}
+}
+
+// TestSettingsUpdateChannelDefault checks a stray channel value in a
+// hand-edited app.json falls back to the stable channel, and the default
+// settings check the stable feed.
+func TestSettingsUpdateChannelDefault(t *testing.T) {
+	dir := t.TempDir()
+	handEdited := `{"updateChannel":"beta"}`
+	if err := os.WriteFile(filepath.Join(dir, "app.json"), []byte(handEdited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSettings(dir); got.updateChannel != "stable" {
+		t.Errorf("updateChannel = %q, want stable for a stray value", got.updateChannel)
+	}
+	if got := loadSettings(t.TempDir()); got.updateChannel != "stable" {
+		t.Errorf("updateChannel = %q, want the stable default", got.updateChannel)
 	}
 }
 

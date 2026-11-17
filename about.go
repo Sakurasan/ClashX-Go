@@ -19,7 +19,8 @@ import (
 	"clashx-go/core"
 )
 
-// appVersion mirrors mygo.json.
+// appVersion mirrors mygo.json; builds with a bundle report the bundle's
+// version instead (displayVersion), so Nightlies show their own number.
 const appVersion = "0.2.18"
 
 //go:embed assets/icon.png
@@ -55,7 +56,7 @@ func (a *app) aboutView(c *ui.Context) {
 		ui.Column(c).FillWidth().AlignItems(ui.Center).Children(func() {
 			ui.Image(c, aboutIcon).Width(128).Height(128)
 			ui.Text(c, "ClashX Go").FontSize(24).FontWeight(600).Margin(14, 0, 0, 0)
-			ui.Text(c, T("版本: ")+appVersion).FontSize(12).TextColor(t.TextMuted).Margin(4, 0, 0, 0)
+			ui.Text(c, T("版本: ")+displayVersion()).FontSize(12).TextColor(t.TextMuted).Margin(4, 0, 0, 0)
 			ui.Row(c).Margin(10, 0, 0, 0).Padding(3, 10).Radius(11).
 				Background(t.Text.Alpha(0.06)).Children(func() {
 				ui.Text(c, "Meta Core "+core.CoreVersion).FontSize(11).TextColor(t.TextMuted)
@@ -111,7 +112,7 @@ func buildStamp() (rev, line string) {
 			when = t.Format("2006-01-02 15:04")
 		}
 	}
-	line = strings.TrimSpace(appVersion + " (" + rev + ") " + when)
+	line = strings.TrimSpace(displayVersion() + " (" + rev + ") " + when)
 	return rev, line
 }
 
