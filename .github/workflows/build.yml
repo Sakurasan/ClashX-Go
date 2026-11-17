@@ -41,17 +41,21 @@ jobs:
         # its feed picks the highest v-prefixed tag, and update.Compare
         # orders 0.2.18 < 0.2.19-nightly.<date> < 0.2.19, so bumping the
         # patch and suffixing -nightly.<UTC date> lands a nightly after the
-        # current stable and before the next one. The rewrite stays in this
-        # checkout; only the release carries it.
+        # current stable and before the next one. mygo build also requires
+        # a CHANGELOG.md section for the version (the update manifest's
+        # notes), so append one — both edits stay in this checkout.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           python3 - <<'PY'
-          import datetime, json, pathlib
+          import datetime, json, os, pathlib
           p = pathlib.Path("mygo.json")
           c = json.loads(p.read_text(encoding="utf-8"))
           major, minor, patch = (int(x) for x in c["version"].split(".")[:3])
           c["version"] = f"{major}.{minor}.{patch + 1}-nightly.{datetime.datetime.now(datetime.UTC):%Y%m%d}"
           p.write_text(json.dumps(c, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          sha = os.environ.get("GITHUB_SHA", "unknown")[:7]
+          with pathlib.Path("CHANGELOG.md").open("a", encoding="utf-8") as f:
+              f.write(f"\n## {c['version']}\n\nAutomated nightly build of `main` at {sha}.\n")
           print("nightly version:", c["version"])
           PY
 
