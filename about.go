@@ -21,7 +21,7 @@ import (
 
 // appVersion mirrors mygo.json; builds with a bundle report the bundle's
 // version instead (displayVersion), so Nightlies show their own number.
-const appVersion = "0.2.18"
+const appVersion = "0.2.19"
 
 //go:embed assets/icon.png
 var appIconPNG []byte
