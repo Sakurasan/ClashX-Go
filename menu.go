@@ -272,7 +272,12 @@ func (m *trayMenu) refresh(s core.State) {
 			ge.current = g.Current
 			ge.item.SetLabel(groupLabel(g.Name, g.Current))
 			for name, it := range ge.members {
-				it.SetChecked(name == g.Current)
+				// Only the two members that change: each update on a radio
+				// item fans out to the whole group in MyGo, so checking all
+				// sixteen makes sixteen round trips of sixteen.
+				if want := name == g.Current; it.IsChecked() != want {
+					it.SetChecked(want)
+				}
 			}
 		}
 		for name, it := range ge.members {
